@@ -79,6 +79,12 @@ class EnumerationEngine(Engine):
         # ---- Normalize controls ----
         plant = (inp.plant or "").upper().strip() or None
         (bmin, bmax) = inp.bucket
+        
+        # Apply DSI variance to reduce bmin
+        # DSI variance is a percentage (as decimal) that reduces the minimum bucket value
+        dsi_variance = float(getattr(inp, 'dsi_variance', 0.05))  # Default 5% if not provided
+        bmin_adjusted = bmin * (1.0 - dsi_variance)
+        
         # Bucket "target" is the midpoint used for upgrade/trim calculation (matches your notebook)
         btarget = ((bmax - bmin) / 2.0) + bmin
 
@@ -110,9 +116,8 @@ class EnumerationEngine(Engine):
         df = df.loc[mask].reset_index(drop=True)
 
         # Guardrail: enumeration grows rapidly with candidate size (n choose k).
-        # If this triggers, you should tighten filters (plant/bird/customer/bucket),
-        # or switch to the two-stage engine for production-scale runs.
-        MAX_CANDIDATES = 80
+        # If this triggers, you should tighten filters (plant/bird/customer/bucket).
+        MAX_CANDIDATES = 500
         if len(df) > MAX_CANDIDATES:
             return EngineResult(
                 results_df=pd.DataFrame(),
@@ -180,6 +185,7 @@ class EnumerationEngine(Engine):
                 return any(cust_type[i] == "FDS" for i in idxs)
             return True
 
+
         def count_parts(idxs: Tuple[int, ...]) -> tuple[int, int]:
             """
             Compute (filet_count, nugget_count) for the combination.
@@ -233,17 +239,18 @@ class EnumerationEngine(Engine):
                             unit_map[trade[i]] = min_nuggets
 
                     # If even the minimum required production doesn't fit, reject
-                    if min_required_sum > bmax:
+                    # Use adjusted bmin that accounts for DSI variance
+                    if min_required_sum > bmin_adjusted:
                         continue
 
                     # If minimum is below bucket min, we can optionally add more nugget units to reach bucket
                     # or to move closer to bucket target without exceeding bmax.
                     t_sum = min_required_sum
 
-                    # Add extra nugget units greedily until we reach bmin (or just improve closeness to btarget)
+                    # Add extra nugget units greedily until we reach bmin_adjusted (or just improve closeness to btarget)
                     # This is optional but matches "can produce more than min_nuggets".
-                    if t_sum < bmin:
-                        # We need at least (bmin - t_sum) more grams.
+                    if t_sum < bmin_adjusted:
+                        # We need at least (bmin_adjusted - t_sum) more grams.
                         # Greedy: add units of the heaviest nugget SKU first (fewer units needed).
                         nugget_idxs_sorted = sorted(nugget_idxs, key=lambda i: float(weights[i]), reverse=True)
                         for i in nugget_idxs_sorted:
@@ -254,26 +261,30 @@ class EnumerationEngine(Engine):
                             max_add = int((bmax - t_sum) // wi)
                             if max_add <= 0:
                                 continue
-                            # Add only what we need to reach bmin (rounded up)
-                            needed = bmin - t_sum
+                            # Add only what we need to reach bmin_adjusted (rounded up)
+                            needed = bmin_adjusted - t_sum
                             add = min(max_add, int((needed + wi - 1) // wi))  # ceil(needed/wi)
                             if add > 0:
                                 t_sum += add * wi
                                 unit_map[trade[i]] += add
-                            if t_sum >= bmin:
+                            if t_sum >= bmin_adjusted:
                                 break
 
-                    # After optional fill, still must fit in bucket
-                    if not (bmin <= t_sum <= bmax):
+                    # After optional fill, still must fit in bucket (using adjusted bmin)
+                    if not (bmin_adjusted <= t_sum):
                         continue
 
                 else:
                     # No nuggets (or min_nuggets==0): normal behavior
+                    # Use adjusted bmin that accounts for DSI variance
                     t_sum = base_sum
-                    if not (bmin <= t_sum <= bmax):
+                    if not (bmin_adjusted <= t_sum):
                         continue
 
                 # 3) Upgrade/Trim metrics
+                # TODO update this to use the random distribution to caclulate upgrade and trim
+                # TODO pink N random values within the bucket (using dist)
+                # Calculate trim & upgrade using that particular value. Avg on Trim/Upgrade of N random = theoretical upgrade
                 upgrade = (t_sum / btarget) * 100.0
                 if upgrade > 100.0:
                     continue
@@ -339,7 +350,9 @@ class EnumerationEngine(Engine):
 
         meta = {
             "bucket": inp.bucket,
+            "bucket_min_adjusted": bmin_adjusted,
             "bucket_target": btarget,
+            "dsi_variance": dsi_variance,
             "bird_size": bird_size,
             "trim_cap": max_trim,
             "min_nuggets": min_nuggets,
