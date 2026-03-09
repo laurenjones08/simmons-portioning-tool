@@ -1,2 +1,3 @@
 # Configuration files with user-specific settings
 settings.json
+/enumeration-api/.hypothesis/
