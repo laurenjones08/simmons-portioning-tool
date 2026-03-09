@@ -4,8 +4,8 @@ WORKDIR /docs
 
 # Install MkDocs and Material theme
 RUN pip install --no-cache-dir \
-    mkdocs==1.5.3 \
-    mkdocs-material==9.4.14
+    mkdocs==1.6.1 \
+    mkdocs-material==9.7.4
 
 # Copy documentation source
 COPY mkdocs.yml .
