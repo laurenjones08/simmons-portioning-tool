@@ -4,7 +4,23 @@ on:
   push:
     branches:
       - "**"
+    paths:
+      - "docker-compose.yml"
+      - "enumeration-api/**"
+      - "global-config-api/**"
+      - "gateway/**"
+      - "docs/**"
+      - "mongodb-init/**"
+      - ".github/workflows/stack-integration.yml"
   pull_request:
+    paths:
+      - "docker-compose.yml"
+      - "enumeration-api/**"
+      - "global-config-api/**"
+      - "gateway/**"
+      - "docs/**"
+      - "mongodb-init/**"
+      - ".github/workflows/stack-integration.yml"
 
 jobs:
   stack-smoke-test:
@@ -50,4 +66,3 @@ jobs:
         if: always()
         run: |
           docker compose down -v
-

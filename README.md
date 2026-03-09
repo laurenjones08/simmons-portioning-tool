@@ -1,8 +1,8 @@
 # Portioning App (Streamlit)
 
-[![Enumeration API Tests](https://github.com/starship/simmons-portioning-tool/actions/workflows/enumeration-tests.yml/badge.svg)](https://github.com/starship/simmons-portioning-tool/actions/workflows/enumeration-tests.yml)
-[![Global Config API Tests](https://github.com/starship/simmons-portioning-tool/actions/workflows/global-config-tests.yml/badge.svg)](https://github.com/starship/simmons-portioning-tool/actions/workflows/global-config-tests.yml)
-[![Stack Integration](https://github.com/starship/simmons-portioning-tool/actions/workflows/stack-integration.yml/badge.svg)](https://github.com/starship/simmons-portioning-tool/actions/workflows/stack-integration.yml)
+[![Enumeration API Tests](https://github.com/laurenjones08/simmons-portioning-tool/actions/workflows/enumeration-tests.yml/badge.svg)](https://github.com/laurenjones08/simmons-portioning-tool/actions/workflows/enumeration-tests.yml)
+[![Global Config API Tests](https://github.com/laurenjones08/simmons-portioning-tool/actions/workflows/global-config-tests.yml/badge.svg)](https://github.com/laurenjones08/simmons-portioning-tool/actions/workflows/global-config-tests.yml)
+[![Stack Integration](https://github.com/laurenjones08/simmons-portioning-tool/actions/workflows/stack-integration.yml/badge.svg)](https://github.com/laurenjones08/simmons-portioning-tool/actions/workflows/stack-integration.yml)
 
 ## 📚 Quick Links
 

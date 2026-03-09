@@ -1,21 +1,14 @@
-name: Enumeration API Tests
+name: Enumeration API Property Tests
 
 on:
-  push:
-    branches:
-      - "**"
-    paths:
-      - "enumeration-api/**"
-      - ".github/workflows/enumeration-tests.yml"
-  pull_request:
-    paths:
-      - "enumeration-api/**"
-      - ".github/workflows/enumeration-tests.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
 
 jobs:
-  test-enumeration:
+  property-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -37,11 +30,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run fast tests (commit gate)
+      - name: Run full property test suite
         env:
           PYTHONPATH: .
         run: |
-          python -m pytest -vv --durations=10 \
-            test_router_integration.py \
-            models/test_mix_properties.py \
-            services/test_mix_service_uniqueness.py
+          python -m pytest -vv --durations=20
+

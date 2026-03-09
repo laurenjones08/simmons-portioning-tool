@@ -4,7 +4,13 @@ on:
   push:
     branches:
       - "**"
+    paths:
+      - "global-config-api/**"
+      - ".github/workflows/global-config-tests.yml"
   pull_request:
+    paths:
+      - "global-config-api/**"
+      - ".github/workflows/global-config-tests.yml"
 
 jobs:
   test-global-config:
