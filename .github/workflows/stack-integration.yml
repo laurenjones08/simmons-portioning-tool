@@ -1,0 +1,53 @@
+name: Stack Integration
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  stack-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start stack
+        run: |
+          docker compose up -d --build
+
+      - name: Wait for services to be ready
+        run: |
+          set -e
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8080/health >/dev/null \
+              && curl -fsS http://localhost:8080/api/enumeration/health >/dev/null \
+              && curl -fsS http://localhost:8080/api/config/health >/dev/null \
+              && curl -fsS http://localhost:3000/ >/dev/null; then
+              echo "Stack is healthy"
+              exit 0
+            fi
+            echo "Waiting for stack... attempt $i/30"
+            sleep 5
+          done
+          echo "Stack failed health checks"
+          exit 1
+
+      - name: Show container status
+        if: always()
+        run: |
+          docker compose ps
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose logs --tail 200
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose down -v
+
