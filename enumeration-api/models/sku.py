@@ -12,7 +12,6 @@ All models use Pydantic for automatic validation and serialization.
 
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
-from enum import Enum
 
 
 class SKU(BaseModel):
@@ -218,6 +217,55 @@ class SKU(BaseModel):
             }
         }
     }
+
+
+class SKUCreate(BaseModel):
+    """Request model for creating or updating a SKU."""
+
+    trade_number: str = Field(..., alias="tradeNumber", min_length=1, max_length=50)
+    customer_name: str = Field(..., alias="customerName", min_length=1, max_length=200)
+    customer_type: str = Field(..., alias="customerType", min_length=1, max_length=50)
+    product_type: str = Field(..., alias="productType", min_length=1, max_length=50)
+    units_per_cut: int = Field(..., alias="unitsPerCut", ge=1)
+    prod_plant: str = Field(..., alias="prodPlant", min_length=1, max_length=50)
+    min_weight: float = Field(..., alias="minWeight", ge=0.0)
+    max_weight: float = Field(..., alias="maxWeight", ge=0.0)
+    target_weight: float = Field(..., alias="targetWeight", ge=0.0)
+    bird_size: str = Field(..., alias="birdSize", min_length=1, max_length=50)
+    allowed_parts: List[str] = Field(..., alias="allowedParts", min_length=1)
+
+    @field_validator('max_weight')
+    @classmethod
+    def validate_max_weight_greater_than_min(cls, v: float, info) -> float:
+        if 'min_weight' in info.data:
+            min_weight = info.data['min_weight']
+            if v <= min_weight:
+                raise ValueError(f'maxWeight ({v}) must be greater than minWeight ({min_weight})')
+        return v
+
+    model_config = {
+        "populate_by_name": True,
+        "json_schema_extra": {
+            "example": {
+                "tradeNumber": "50624",
+                "customerName": "CHICK FIL A INC",
+                "customerType": "FDS",
+                "productType": "NUGGET",
+                "unitsPerCut": 1,
+                "prodPlant": "FSP",
+                "minWeight": 10.0,
+                "maxWeight": 19.0,
+                "targetWeight": 15.0,
+                "birdSize": "SB",
+                "allowedParts": ["D"]
+            }
+        }
+    }
+
+
+class SKUUpdate(SKUCreate):
+    """Request model for updating an existing SKU (same as create)."""
+    pass
 
 
 class SearchCriteria(BaseModel):

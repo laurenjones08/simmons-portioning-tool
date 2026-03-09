@@ -26,6 +26,7 @@ from typing import List, Optional, Dict, Any
 from pymongo.errors import DuplicateKeyError
 from models.sku import SKU, SearchCriteria, BatchImportResult
 from repositories.sku_repository import SKURepository
+from repositories.mix_repository import MixRepository
 
 
 class SKUService:
@@ -48,16 +49,17 @@ class SKUService:
         repository: SKURepository instance for database access
     """
     
-    def __init__(self, repository: SKURepository):
+    def __init__(self, sku_repository: SKURepository, mix_repository: MixRepository):
         """
-        Initialize the service with a repository dependency.
-        
+        Initialize the service with repository dependencies.
+
         This follows the dependency injection pattern, making the service
         testable by allowing mock repositories to be injected.
         
         Args:
-            repository: SKURepository instance for database operations
-            
+            sku_repository: SKURepository instance for SKU database operations
+            mix_repository: MixRepository instance for MIX database operations
+
         Example:
             from database import get_database
             from repositories.sku_repository import SKURepository
@@ -66,8 +68,9 @@ class SKUService:
             repo = SKURepository(db)
             service = SKUService(repo)
         """
-        self.repository = repository
-    
+        self.sku_repository = sku_repository
+        self.mix_repository = mix_repository
+
     def get_sku_by_trade_number(self, trade_number: str) -> Optional[SKU]:
         """
         Retrieve a single SKU by its trade number.
@@ -101,8 +104,8 @@ class SKUService:
         """
         try:
             # Call repository to fetch the document
-            sku_doc = self.repository.find_by_trade_number(trade_number)
-            
+            sku_doc = self.sku_repository.find_by_trade_number(trade_number)
+
             # If not found, return None
             if sku_doc is None:
                 return None
@@ -166,8 +169,8 @@ class SKUService:
             criteria_dict = criteria.model_dump(by_alias=True, exclude_none=True)
             
             # Call repository with the filter
-            sku_docs = self.repository.find_by_criteria(criteria_dict)
-            
+            sku_docs = self.sku_repository.find_by_criteria(criteria_dict)
+
             # Convert each MongoDB document to a Pydantic SKU model
             skus = [SKU(**doc) for doc in sku_docs]
             
@@ -266,8 +269,8 @@ class SKUService:
             
             # Step 3: Perform batch insert
             # This is an atomic operation - all succeed or all fail
-            inserted_count = self.repository.insert_many(sku_documents)
-            
+            inserted_count = self.sku_repository.insert_many(sku_documents)
+
             return BatchImportResult(
                 total=total,
                 successful=inserted_count,
@@ -314,55 +317,87 @@ class SKUService:
             )
     
     def export_all(self, filter_criteria: Optional[Dict[str, Any]] = None) -> List[SKU]:
-        """
-        Export all SKUs from the database, optionally filtered.
-        
-        This method retrieves all SKUs (or a filtered subset) for export purposes.
-        Use with caution on large collections as it loads all data into memory.
-        
-        Business Logic:
-        - If no filter provided, returns all SKUs
-        - Filter uses MongoDB query syntax (not SearchCriteria model)
-        - Results are not paginated (all returned at once)
-        - For large datasets, consider adding pagination
-        
-        Args:
-            filter_criteria: Optional MongoDB filter dict (default: None = all SKUs)
-            
-        Returns:
-            List of all SKU models matching the filter
-            Returns empty list if no SKUs exist
-            
-        Raises:
-            Exception: For database errors
-            
-        Example:
-            # Export all SKUs
-            all_skus = service.export_all()
-            print(f"Exported {len(all_skus)} SKUs")
-            
-            # Export filtered SKUs
-            fds_skus = service.export_all({"customerType": "FDS"})
-            print(f"Exported {len(fds_skus)} FDS SKUs")
-        
-        Performance Note:
-            For large collections (>10,000 SKUs), consider:
-            - Adding pagination
-            - Streaming results instead of loading all into memory
-            - Using cursor-based iteration
-        """
+        """Export all SKUs from the database, optionally filtered."""
         try:
             if filter_criteria:
-                # Use provided filter
-                sku_docs = self.repository.find_by_criteria(filter_criteria)
+                sku_docs = self.sku_repository.find_by_criteria(filter_criteria)
             else:
-                # Get all SKUs
-                sku_docs = self.repository.find_all()
-            
-            # Convert documents to Pydantic models
+                sku_docs = self.sku_repository.find_all()
+
             skus = [SKU(**doc) for doc in sku_docs]
-            
             return skus
-            
         except Exception as e:
             raise Exception(f"Error exporting SKUs: {str(e)}")
+
+    def create_or_update_sku(self, payload: Any) -> SKU:
+        """
+        Create a new SKU or update if it already exists (upsert operation).
+
+        Args:
+            payload: SKUCreate model with SKU data
+
+        Returns:
+            SKU model of the created/updated SKU
+
+        Raises:
+            ValueError: For validation errors
+            Exception: For database errors
+        """
+        try:
+            # Check if SKU exists
+            existing = self.sku_repository.find_by_trade_number(payload.trade_number)
+
+            # Convert payload to document
+            doc = payload.model_dump(by_alias=True)
+            doc["_id"] = payload.trade_number
+
+            if existing:
+                # Update existing SKU
+                result = self.sku_repository.update(payload.trade_number, doc)
+                if result is None:
+                    raise Exception("Failed to update SKU")
+                return SKU(**doc)
+            else:
+                # Create new SKU
+                self.sku_repository.insert(doc)
+                return SKU(**doc)
+
+        except DuplicateKeyError:
+            raise ValueError(f"SKU with trade number {payload.trade_number} already exists")
+        except Exception as e:
+            raise Exception(f"Error creating/updating SKU: {str(e)}")
+
+    def delete_sku_with_mixes(self, trade_number: str) -> Dict[str, Any]:
+        """
+        Delete a SKU and cascade delete all associated mixes.
+
+        This operation:
+        1. Finds and deletes all mixes that contain the SKU
+        2. Deletes the SKU itself
+
+        Args:
+            trade_number: The trade number of the SKU to delete
+
+        Returns:
+            Dictionary with:
+                - deleted: bool indicating if SKU was deleted
+                - mixes_deleted: int count of mixes deleted
+        """
+        try:
+            # Check if SKU exists
+            sku = self.sku_repository.find_by_trade_number(trade_number)
+            if not sku:
+                return {"deleted": False, "mixes_deleted": 0}
+
+            # Delete all mixes containing this SKU
+            mixes_deleted = self.mix_repository.delete_by_sku_trade_number(trade_number)
+
+            # Delete the SKU
+            sku_deleted = self.sku_repository.delete_by_trade_number(trade_number)
+
+            return {
+                "deleted": sku_deleted,
+                "mixes_deleted": mixes_deleted
+            }
+        except Exception as e:
+            raise Exception(f"Error deleting SKU and associated mixes: {str(e)}")

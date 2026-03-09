@@ -52,3 +52,22 @@ class MixRepository:
             return result.deleted_count > 0
         except PyMongoError as exc:
             raise Exception(f"Database error deleting mix: {exc}")
+
+    def delete_by_sku_trade_number(self, sku_trade_number: str) -> int:
+        """
+        Delete all mixes that contain the specified SKU trade number.
+
+        Args:
+            sku_trade_number: The SKU trade number to search for in mixes
+
+        Returns:
+            Count of mixes deleted
+        """
+        try:
+            # Find all mixes where the SKU trade number exists as a key in the skus map
+            result = self.collection.delete_many(
+                {f"skus.{sku_trade_number}": {"$exists": True}}
+            )
+            return result.deleted_count
+        except PyMongoError as exc:
+            raise Exception(f"Database error deleting mixes by SKU: {exc}")

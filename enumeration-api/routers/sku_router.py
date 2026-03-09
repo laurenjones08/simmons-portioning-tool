@@ -31,9 +31,10 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.database import Database
 
-from models.sku import SKU, SearchCriteria, BatchImportRequest, BatchImportResult
+from models.sku import SKU, SKUCreate, SearchCriteria, BatchImportRequest, BatchImportResult
 from services.sku_service import SKUService
 from repositories.sku_repository import SKURepository
+from repositories.mix_repository import MixRepository
 from database import get_database
 
 
@@ -73,8 +74,9 @@ def get_sku_service(db: Database = Depends(get_database)) -> SKUService:
             # service is automatically created and injected
             return service.get_sku_by_trade_number(trade_number)
     """
-    repository = SKURepository(db)
-    return SKUService(repository)
+    sku_repository = SKURepository(db)
+    mix_repository = MixRepository(db)
+    return SKUService(sku_repository, mix_repository)
 
 
 @router.get(
@@ -357,6 +359,44 @@ async def search_skus(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error searching SKUs: {str(e)}"
         )
+
+
+@router.post("", response_model=SKU, status_code=status.HTTP_201_CREATED)
+async def create_or_update_sku(
+    payload: SKUCreate,
+    service: SKUService = Depends(get_sku_service)
+):
+    """Create a new SKU or update if it already exists."""
+    try:
+        return service.create_or_update_sku(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error creating/updating SKU: {exc}")
+
+
+@router.delete("/{sku_id}", status_code=status.HTTP_200_OK)
+async def delete_sku(
+    sku_id: str,
+    service: SKUService = Depends(get_sku_service)
+):
+    """Delete SKU and all associated mixes."""
+    try:
+        result = service.delete_sku_with_mixes(sku_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error deleting SKU: {exc}")
+
+    if not result["deleted"]:
+        raise HTTPException(
+            status_code=404,
+            detail=f"SKU with id {sku_id} not found"
+        )
+
+    return {
+        "deleted": True,
+        "skuId": sku_id,
+        "mixesDeleted": result["mixes_deleted"]
+    }
 
 
 @router.post(

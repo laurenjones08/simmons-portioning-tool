@@ -204,6 +204,28 @@ class SKURepository:
         except PyMongoError as e:
             raise Exception(f"Database error inserting SKU: {str(e)}")
     
+    def update(self, trade_number: str, sku_document: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Update an existing SKU document.
+
+        Args:
+            trade_number: The trade number (_id) of the SKU to update
+            sku_document: Dictionary containing the updated SKU data
+
+        Returns:
+            The updated document if found, None otherwise
+        """
+        try:
+            result = self.collection.replace_one(
+                {"_id": trade_number},
+                sku_document
+            )
+            if result.matched_count > 0:
+                return sku_document
+            return None
+        except PyMongoError as e:
+            raise Exception(f"Database error updating SKU: {str(e)}")
+
     def insert_many(self, sku_documents: List[Dict[str, Any]]) -> int:
         """
         Insert multiple SKU documents in a single batch operation.
@@ -347,4 +369,3 @@ class SKURepository:
             return result.deleted_count > 0
         except PyMongoError as e:
             raise Exception(f"Database error deleting SKU: {str(e)}")
-
