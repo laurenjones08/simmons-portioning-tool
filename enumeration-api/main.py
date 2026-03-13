@@ -265,7 +265,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Router registration
 # Import and register all routers with appropriate prefixes and tags
-from routers import sku_router, mix_router
+from routers import (
+    bucket_router,
+    cut_strategy_router,
+    mix_metric_router,
+    mix_router,
+    sku_router,
+)
 
 # Register SKU router with /skus prefix
 # All SKU endpoints will be available under /skus (e.g., /skus/50624, /skus/search)
@@ -279,6 +285,25 @@ app.include_router(
     mix_router.router,
     prefix="/mixes",
     tags=["MIXes"]
+)
+
+
+app.include_router(
+    mix_metric_router.router,
+    prefix="/metrics",
+    tags=["MixMetrics"]
+)
+
+app.include_router(
+    bucket_router.router,
+    prefix="/buckets",
+    tags=["Buckets"]
+)
+
+app.include_router(
+    cut_strategy_router.router,
+    prefix="/cut-strategies",
+    tags=["CutStrategies"]
 )
 
 

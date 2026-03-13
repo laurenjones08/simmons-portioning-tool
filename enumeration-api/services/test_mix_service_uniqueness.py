@@ -18,6 +18,8 @@ def base_payload(mfg_type: str):
         mfgType=mfg_type,
         cutStrategyID="strategy-1",
         beltSpeed=1.1,
+        reqPlant="FSP",
+        reqBirdSize="SB",
     )
 
 

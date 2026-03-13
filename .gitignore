@@ -1,3 +1,8 @@
 # Configuration files with user-specific settings
 settings.json
 /enumeration-api/.hypothesis/
+/global-config-api/.hypothesis/
+/.hypothesis/
+/enumeration-worker-api/pytest_out.txt
+/pytest_out.txt
+/enumeration-api/__pycache__

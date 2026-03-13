@@ -62,3 +62,32 @@ docker compose up -d --build
 ```
 
 See `MICROSERVICE_API_ONBOARDING.md` for how to add new microservice APIs to this setup.
+
+## Long-Running Enumeration Worker
+
+Use the `enumeration-worker` container for long-running staged enumeration across SKU combinations of size 1 through 4.
+
+- Stage 1: all 1-SKU combos
+- Stage 2: all 2-SKU combos
+- Stage 3: all 3-SKU combos
+- Stage 4: all 4-SKU combos
+
+The worker stores run progress checkpoints in `enumeration_runs` and outputs in `enumeration_results`.
+If the worker is restarted with the same `ENUMERATION_RUN_ID`, it resumes from the last stage checkpoint.
+
+Run it once:
+
+```powershell
+docker compose run --rm enumeration-worker
+```
+
+Override run settings:
+
+```powershell
+docker compose run --rm `
+  -e ENUMERATION_RUN_ID=run-2026-03-13 `
+  -e ENUMERATION_BATCH_SIZE=500 `
+  -e ENUMERATION_MAX_COMBINATION_SIZE=4 `
+  -e ENUMERATION_SKUS=50624,50625,50626 `
+  enumeration-worker
+```

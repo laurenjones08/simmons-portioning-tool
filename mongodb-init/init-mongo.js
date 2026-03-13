@@ -292,6 +292,62 @@ db.mixes.createIndex(
 );
 print('    ✓ Index created: idx_mfg_type_flags (compound)');
 
+// Create collections for staged enumeration runs and results
+print('\n  Creating "enumeration_runs" collection...');
+db.createCollection('enumeration_runs');
+print('  ✓ Collection "enumeration_runs" created');
+
+print('\n  Creating "enumeration_results" collection...');
+db.createCollection('enumeration_results');
+print('  ✓ Collection "enumeration_results" created');
+
+print('\n  Creating "job_status" collection (enumeration-worker-api)...');
+db.createCollection('job_status');
+print('  ✓ Collection "job_status" created');
+
+print('\n  Creating indexes for enumeration run tracking...');
+db.enumeration_runs.createIndex(
+    { "status": 1 },
+    {
+        name: "idx_run_status",
+        background: true
+    }
+);
+print('    ✓ Index created: idx_run_status');
+
+db.enumeration_results.createIndex(
+    { "runId": 1, "comboKey": 1 },
+    {
+        name: "uniq_run_combo",
+        unique: true,
+        background: true
+    }
+);
+print('    ✓ Index created: uniq_run_combo (unique compound)');
+
+db.enumeration_results.createIndex(
+    { "runId": 1, "stage": 1 },
+    {
+        name: "idx_run_stage",
+        background: true
+    }
+);
+print('    ✓ Index created: idx_run_stage');
+
+db.enumeration_results.createIndex(
+    { "runId": 1, "skuTradeNumbers": 1 },
+    {
+        name: "idx_run_skus",
+        background: true
+    }
+);
+print('    ✓ Index created: idx_run_skus');
+
+db.job_status.createIndex({ "status": 1 }, { name: "idx_job_status_status", background: true });
+db.job_status.createIndex({ "runId": 1 }, { name: "idx_job_status_run_id", background: true });
+db.job_status.createIndex({ "createdAt": -1 }, { name: "idx_job_status_created_at", background: true });
+print('    ✓ Indexes created for "job_status"');
+
 // Insert sample SKU data for testing (optional - uncomment if needed)
 /*
 print('\n  Inserting sample SKU data...');
@@ -493,6 +549,12 @@ print('  SKU indexes: ' + db.skus.getIndexes().length);
 print('  SKU documents: ' + db.skus.countDocuments({}));
 print('  MIX indexes: ' + db.mixes.getIndexes().length);
 print('  MIX documents: ' + db.mixes.countDocuments({}));
+print('  Enumeration run indexes: ' + db.enumeration_runs.getIndexes().length);
+print('  Enumeration run documents: ' + db.enumeration_runs.countDocuments({}));
+print('  Enumeration result indexes: ' + db.enumeration_results.getIndexes().length);
+print('  Enumeration result documents: ' + db.enumeration_results.countDocuments({}));
+print('  Job status indexes: ' + db.job_status.getIndexes().length);
+print('  Job status documents: ' + db.job_status.countDocuments({}));
 
 // Verify config_db
 db = db.getSiblingDB('config_db');
