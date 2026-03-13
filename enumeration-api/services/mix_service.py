@@ -39,7 +39,8 @@ class MixService:
 
         sku_trade_number = raw.get("skuTradeNumber")
         if sku_trade_number:
-            mongo_criteria[f"skus.{sku_trade_number}"] = {"$exists": True}
+            # Query denormalized skuKeys for efficient membership lookup.
+            mongo_criteria["skuKeys"] = sku_trade_number
 
         docs = self.repository.search(mongo_criteria)
         return [MIX(**doc) for doc in docs]

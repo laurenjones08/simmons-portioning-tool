@@ -1,7 +1,7 @@
 """MIX data model used for portioning decision inputs."""
 
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from bson import ObjectId
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -13,6 +13,13 @@ class MfgType(str, Enum):
     DSI = "DSI"
     DB20 = "DB20"
 
+class BirdSize(str, Enum):
+    """Supported manufacturing line types for mix execution."""
+
+    SB = "SB"
+    BB = "BB"
+    ALL = "ALL"
+
 
 class MixBase(BaseModel):
     """Base fields shared by mix create/update/read models."""
@@ -22,6 +29,9 @@ class MixBase(BaseModel):
         description="Map of SKU trade number to Part ID, e.g. {'123': 'A', '345': 'B'}",
         min_length=1,
     )
+    # Helper array of SKU trade numbers (keys from `skus`) to support indexing and queries
+    # in Mongo: store as `skuKeys` for easier querying by SKU presence (e.g. { skuKeys: "123" }).
+    sku_keys: Optional[List[str]] = Field(None, alias="skuKeys", description="List of SKU trade numbers present in this mix", min_length=0)
     includes_fds: bool = Field(..., alias="includesFDS")
     includes_rtl: bool = Field(..., alias="includesRTL")
     includes_nug: bool = Field(..., alias="includesNug")
@@ -34,6 +44,8 @@ class MixBase(BaseModel):
     num_fillets: int = Field(..., alias="numFillets", ge=0)
     fillet_weight: float = Field(..., alias="filletWeight", ge=0.0)
     mfg_type: MfgType = Field(..., alias="mfgType")
+    plant: str = Field(..., alias="reqPlant", min_length=1, max_length=100)
+    bird_size: BirdSize = Field(..., alias="reqBirdSize")
     cut_strategy_id: str = Field(..., alias="cutStrategyID", min_length=1, max_length=100)
     belt_speed: float = Field(..., alias="beltSpeed", ge=0.0)
 
@@ -55,6 +67,14 @@ class MixBase(BaseModel):
         else:
             if self.nugget_target_weight is not None:
                 raise ValueError("nuggetTargetWeight must be null when includesNug is false")
+        # Populate sku_keys from the skus map so we can index/search mixes by SKU trade number.
+        try:
+            # Avoid overwriting if sku_keys was explicitly provided by the caller
+            if getattr(self, "sku_keys", None) in (None, []):
+                object.__setattr__(self, "sku_keys", list(self.skus.keys()))
+        except Exception:
+            # If skus isn't a dict for some reason, skip population; validation elsewhere will catch it.
+            pass
         return self
 
     model_config = {
@@ -107,6 +127,8 @@ class MixSearchCriteria(BaseModel):
     includes_fds: Optional[bool] = Field(None, alias="includesFDS")
     includes_rtl: Optional[bool] = Field(None, alias="includesRTL")
     includes_nug: Optional[bool] = Field(None, alias="includesNug")
+    plant: Optional[str] = Field(None, alias="reqPlant", min_length=1)
+    bird_size: Optional[BirdSize] = Field(None, alias="reqBirdSize")
     mfg_type: Optional[MfgType] = Field(None, alias="mfgType")
     cut_strategy_id: Optional[str] = Field(None, alias="cutStrategyID")
     sku_trade_number: Optional[str] = Field(None, alias="skuTradeNumber", min_length=1)

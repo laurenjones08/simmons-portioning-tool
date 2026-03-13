@@ -150,6 +150,8 @@ services:
         condition: service_started
       global-config-api:
         condition: service_started
+      enumeration-worker-api:
+        condition: service_started
 
   # Documentation Service (MkDocs)
   docs:
@@ -205,6 +207,37 @@ services:
     # Connect to custom network
     networks:
       - mongo_net
+
+  # Enumeration Worker API Service
+  # Dedicated microservice for submitting and monitoring long-running enumeration jobs.
+  # Exposes a REST API (POST /jobs, GET /jobs/{id}, POST /jobs/{id}/cancel).
+  # Runs the enumeration in a background thread and writes results + job status to MongoDB.
+  enumeration-worker-api:
+    build:
+      context: ./enumeration-worker-api
+      dockerfile: Dockerfile
+
+    container_name: enumeration-worker-api
+    restart: always
+
+    environment:
+      MONGODB_URL: mongodb://root:example@mongodb:27017
+      MONGODB_DATABASE: enumeration_db
+      SERVICE_NAME: enumeration-worker-api
+      ROOT_PATH: /api/enumeration-worker
+
+    expose:
+      - "8002"
+
+    volumes:
+      - ./enumeration-worker-api:/app
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
 
 # Named volumes for data persistence
 # Volumes persist data even when containers are removed

@@ -15,6 +15,18 @@ Usage:
     app.include_router(mix_router.router, prefix="/mixes", tags=["MIXes"])
 """
 
-from . import sku_router, mix_router
+from . import (
+    bucket_router,
+    cut_strategy_router,
+    mix_metric_router,
+    mix_router,
+    sku_router,
+)
 
-__all__ = ["sku_router", "mix_router"]
+__all__ = [
+    "sku_router",
+    "mix_router",
+    "mix_metric_router",
+    "bucket_router",
+    "cut_strategy_router",
+]

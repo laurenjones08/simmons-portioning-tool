@@ -264,13 +264,14 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Router registration will be added when config_router is implemented
-# from routers import config_router
-# app.include_router(
-#     config_router.router,
-#     prefix="/config",
-#     tags=["Configuration"]
-# )
+# Router registration
+from routers import config_router
+
+app.include_router(
+    config_router.router,
+    prefix="/config",
+    tags=["Configuration"]
+)
 
 
 if __name__ == "__main__":
