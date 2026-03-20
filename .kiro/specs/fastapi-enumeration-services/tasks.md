@@ -44,11 +44,6 @@
 
 - [x] 3.1. Write property test for SKU schema validation
 
-
-
-
-
-
   - **Property 3: SKU schema validation**
   - **Validates: Requirements 7.2, 7.3, 7.4**
 
@@ -258,7 +253,7 @@
 
 
 
-- [-] 11. Implement configuration router layer
+- [ ] 11. Implement configuration router layer
 
   - Create routers/config_router.py with FastAPI router
   - Implement GET /health endpoint
@@ -272,7 +267,7 @@
 
 
 
-- [~] 12. Implement observability - Prometheus metrics
+- [ ] 12. Implement observability - Prometheus metrics
 
   - Add prometheus-client dependency
   - Create metrics module with Counter, Histogram, and Gauge metrics

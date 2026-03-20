@@ -2,11 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Install shared package
+COPY enumeration-shared /shared
+RUN pip install --no-cache-dir /shared
+
+COPY enumeration-worker-api/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY enumeration-worker-api/ .
 
 EXPOSE 8002
 

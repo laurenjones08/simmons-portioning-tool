@@ -6,9 +6,13 @@ FROM python:3.11-slim
 # All subsequent commands will run from this directory
 WORKDIR /app
 
+# Install shared package
+COPY enumeration-shared /shared
+RUN pip install --no-cache-dir /shared
+
 # Copy requirements file first to leverage Docker layer caching
 # If requirements.txt doesn't change, Docker will use cached layer
-COPY requirements.txt .
+COPY enumeration-api/requirements.txt .
 
 # Install Python dependencies
 # --no-cache-dir reduces image size by not storing pip cache
@@ -18,7 +22,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application code into the container
 # This is done after installing dependencies to optimize caching
-COPY . .
+COPY enumeration-api/ .
 
 # Expose port 8000 for the FastAPI application
 # This is the port Uvicorn will listen on

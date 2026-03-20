@@ -10,9 +10,7 @@ from pymongo.errors import PyMongoError, DuplicateKeyError
 class MixMetricRepository:
     def __init__(self, database: Database):
         self.collection: Collection = database["mix_metrics"]
-        # Ensure unique composite key enforced by using _id field as the composite
-        self.collection.create_index([("_id", 1)], unique=True, name="uniq_metric_id")
-        # Index skuKeys for fast lookup when denormalized
+        # MongoDB always provides a unique _id index automatically.
         self.collection.create_index([("skuKeys", 1)], name="idx_sku_keys")
 
     def create(self, metric_document: Dict[str, Any]) -> Dict[str, Any]:

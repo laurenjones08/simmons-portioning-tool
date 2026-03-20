@@ -21,6 +21,10 @@ class Settings(BaseSettings):
         default="enumeration-worker-api",
         description="Service name for logging",
     )
+    global_config_api_url: str = Field(
+        default="http://global-config-api:8001",
+        description="Base URL of the Global Config API for fetching runtime config values",
+    )
 
     model_config = {
         "env_file": ".env",

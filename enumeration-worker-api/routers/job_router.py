@@ -1,33 +1,26 @@
-"""HTTP endpoints for enumeration job management."""
-
+﻿"""HTTP endpoints for enumeration job management."""
 from __future__ import annotations
-
 from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pymongo.database import Database
-
 from database import get_database
 from job_service import JobService
 from models.job import CreateJobRequest, JobStatusResponse
-
 router = APIRouter()
-
-
 def _get_service(db: Database = Depends(get_database)) -> JobService:
     return JobService(db)
-
-
 @router.post(
     "",
     response_model=JobStatusResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Submit a new enumeration job",
     description=(
-        "Submits a long-running enumeration job that enumerates all SKU combinations "
-        "of size 1 through `maxCombinationSize` and calculates metrics against every "
-        "bucket. The job runs in a background thread. Only one job can run at a time. "
-        "Results are written to the `enumeration_results` collection."
+        "Submits a long-running enumeration job that loads candidate SKUs using "
+        "`plantFilter` and/or `birdSizeFilter`, then enumerates all SKU combinations "
+        "of size 1 through 4 and calculates metrics against every bucket. "
+        "If neither filter is provided, the submitted job is marked `failed`. "
+        "Only one job can run at a time. Results are written to the "
+        "`enumeration_results` collection."
     ),
     responses={
         202: {"description": "Job accepted and queued"},
@@ -44,8 +37,6 @@ async def submit_job(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error submitting job: {exc}")
-
-
 @router.get(
     "",
     response_model=List[JobStatusResponse],
@@ -60,8 +51,6 @@ async def list_jobs(
     service: JobService = Depends(_get_service),
 ) -> List[JobStatusResponse]:
     return service.list_jobs(status_filter=status)
-
-
 @router.get(
     "/{job_id}",
     response_model=JobStatusResponse,
@@ -77,8 +66,6 @@ async def get_job(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
-
-
 @router.post(
     "/{job_id}/cancel",
     response_model=JobStatusResponse,
@@ -104,4 +91,3 @@ async def cancel_job(
             detail=f"Job {job_id} not found or is already in a terminal state (completed/failed/cancelled)",
         )
     return result
-

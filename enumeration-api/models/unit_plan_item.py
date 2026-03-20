@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from models.partCode import PartCode
+from .part_code import PartCode
 
 
 class UnitPlanItem(BaseModel):
