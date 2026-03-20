@@ -14,8 +14,10 @@ from .cut_strategy import (
     CutStrategyUpdate,
 )
 from .mix_metric import MixMetric, MixMetricSearchCriteria
+from .part_code import PartCode
 
 __all__ = [
+    "PartCode",
     "SKU",
     "SearchCriteria",
     "BatchImportRequest",

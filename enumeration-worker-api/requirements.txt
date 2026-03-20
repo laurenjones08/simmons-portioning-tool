@@ -23,3 +23,6 @@ pytest==7.4.4
 # HTTPX - Required by starlette.testclient for API integration tests
 httpx==0.26.0
 
+# Requests - HTTP library for calling external services (e.g. Global Config API)
+requests==2.31.0
+

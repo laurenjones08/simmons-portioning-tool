@@ -77,17 +77,11 @@ class Settings(BaseSettings):
         description="Port number of the Jaeger agent"
     )
     
-    class Config:
-        """
-        Pydantic Settings configuration.
-        
-        env_file: Specifies the .env file to load (optional)
-        env_file_encoding: Character encoding for the .env file
-        case_sensitive: Whether environment variable names are case-sensitive
-        """
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False  # Allow lowercase env vars to match uppercase fields
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+    }
 
 
 @lru_cache()

@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 from pydantic import model_validator
-from unit_plan_item import UnitPlanItem
+from .unit_plan_item import UnitPlanItem
 
 
 # todo class that quantifies upgrade, value, and trim for a mix bucket combo. It also includes the unit plan
@@ -36,7 +36,7 @@ class MixMetric(BaseModel):
                 "bucketId": "65f0c8fd6fb6bd463e25d4b8",
                 "_id": "65f0c8fd6fb6bd463e25d4b7:65f0c8fd6fb6bd463e25d4b8",
                 "upgradePercentage": 20.5,
-                "valuePercentage": 15.3,
+                "value": 1.3,
                 "trimPercentage": 5.2,
                 "unitPlan": [],
                 "skuKeys": ["123", "345", "567"],

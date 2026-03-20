@@ -2,542 +2,387 @@
 
 ## Overview
 
-This design implements a configurable settings page for the Streamlit portioning model application. The solution uses Streamlit's multipage app architecture to add a dedicated settings page, a JSON-based configuration file for persistence, and a configuration manager module to handle loading, validation, and saving of parameters.
+The Streamlit Settings Page is a multi-page frontend application that provides a management UI for the portioning tool system. It replaces the legacy `app.py` single-page file-upload workflow with a structured, API-driven interface.
 
-The design maintains backward compatibility with the existing `config.py` while allowing runtime configuration changes through a user-friendly interface.
+The app connects to three backend services through the nginx API gateway:
+- **Enumeration API** (`/api/enumeration/`) — CRUD for Buckets, SKUs, Cut Strategies, and Mixes
+- **Worker API** (`/api/enumeration-worker/`) — Job submission and monitoring
+- **Config API** (`/api/config/`) — System configuration parameters
 
-Ensure that our json file never pushes to Git. I.E make sure our config json file is added to the gitignore.
+The app is a pure frontend: it holds no persistent state of its own and delegates all data operations to the backend APIs.
+
+---
 
 ## Architecture
 
-### High-Level Architecture
+```mermaid
+graph TD
+    subgraph Streamlit App
+        NAV[Sidebar Navigation]
+        PAGES[Page Components]
+        CLIENT[API Client Layer]
+    end
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Streamlit Application                    │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  ┌──────────────┐              ┌──────────────┐            │
-│  │   app.py     │              │   pages/     │            │
-│  │  (Main Page) │              │  settings.py │            │
-│  └──────┬───────┘              └──────┬───────┘            │
-│         │                              │                     │
-│         │         ┌────────────────────┘                     │
-│         │         │                                          │
-│         ▼         ▼                                          │
-│  ┌─────────────────────────────┐                            │
-│  │   portioning/config_manager.py │                         │
-│  │  - load_config()             │                            │
-│  │  - save_config()             │                            │
-│  │  - validate_config()         │                            │
-│  │  - get_defaults()            │                            │
-│  └─────────────┬───────────────┘                            │
-│                │                                              │
-└────────────────┼──────────────────────────────────────────┘
-                 │
-                 ▼
-         ┌──────────────────┐
-         │  settings.json   │
-         │  (Configuration) │
-         └──────────────────┘
+    subgraph Docker Network
+        GW[nginx API Gateway :8080]
+        ENUM[enumeration-api :8000]
+        WORKER[enumeration-worker-api :8002]
+        CONFIG[global-config-api :8001]
+    end
+
+    NAV --> PAGES
+    PAGES --> CLIENT
+    CLIENT -->|ENUMERATION_API_URL| GW
+    GW --> ENUM
+    GW --> WORKER
+    GW --> CONFIG
 ```
 
-### Component Interaction Flow
+The app is structured as a standard Streamlit multi-page application using the `pages/` directory convention. Each page is a self-contained Python module. A shared `api_client.py` module handles all HTTP communication.
 
-1. **Application Startup**: `config_manager.load_config()` loads settings from `settings.json` or falls back to `config.py` defaults
-2. **Settings Page Access**: User navigates to settings page via Streamlit sidebar
-3. **Parameter Editing**: User modifies parameters through UI controls
-4. **Validation**: `config_manager.validate_config()` validates inputs before saving
-5. **Persistence**: `config_manager.save_config()` writes validated config to `settings.json`
-6. **Application Use**: Main app and engines use config values from `config_manager`
+**Key design decisions:**
+- All API base URLs are read from environment variables with localhost fallbacks, enabling the same image to run in Docker Compose or locally.
+- The API client raises typed exceptions on HTTP errors so page components can catch and display them without crashing.
+- Streamlit session state is used to cache API responses within a session and to track UI state (selected row, edit mode, batch edit buffer).
+
+---
 
 ## Components and Interfaces
 
-### 1. Configuration Manager Module (`portioning/config_manager.py`)
+### Directory Structure
 
-The configuration manager provides a centralized interface for configuration operations.
-
-#### Data Structures
-
-```python
-@dataclass
-class AppConfig:
-    """Complete application configuration."""
-    # Existing parameters from config.py
-    buckets: List[Tuple[int, int]]
-    illegal_pairs: Dict[str, List[str]]
-    trim_cap: int
-    time_limit_sec: int
-    gap: float
-    chunk_size: int
-    
-    # Existing UI parameters (currently hardcoded)
-    pieces_per_min: float
-    line_eff: float
-    
-    # New parameters
-    dsi_variance: float
-    lines: List[str]
-    cut_strategies: List[str]
-    trim_dollar_value: float
+```
+streamlit-app/
+├── app.py                  # Entry point: st.set_page_config + sidebar nav
+├── pages/
+│   ├── 1_Buckets.py
+│   ├── 2_SKUs.py
+│   ├── 3_Cut_Strategies.py
+│   ├── 4_Mix_Visualization.py
+│   ├── 5_Mix_Generation.py
+│   └── 6_Global_Config.py
+├── api_client.py           # HTTP client for all three APIs
+└── requirements.txt
 ```
 
-#### Core Functions
+### API Client (`api_client.py`)
+
+The client reads base URLs from environment variables:
 
 ```python
-def load_config() -> AppConfig:
-    """
-    Load configuration from settings.json or fall back to defaults.
-    
-    Returns:
-        AppConfig: Loaded configuration object
-    
-    Behavior:
-        1. Check if settings.json exists
-        2. If exists, load and validate JSON
-        3. If not exists or invalid, use defaults from config.py
-        4. Return AppConfig instance
-    """
-
-def save_config(config: AppConfig) -> bool:
-    """
-    Save configuration to settings.json.
-    
-    Args:
-        config: Configuration object to save
-    
-    Returns:
-        bool: True if save successful, False otherwise
-    
-    Behavior:
-        1. Validate config using validate_config()
-        2. Convert AppConfig to JSON-serializable dict
-        3. Write to settings.json with pretty formatting
-        4. Return success status
-    """
-
-def validate_config(config: AppConfig) -> Tuple[bool, List[str]]:
-    """
-    Validate all configuration parameters.
-    
-    Args:
-        config: Configuration object to validate
-    
-    Returns:
-        Tuple of (is_valid, error_messages)
-    
-    Validation Rules:
-        - Numeric parameters within acceptable ranges
-        - Bucket tuples have min < max
-        - Percentages between 0 and 100
-        - Lists are non-empty where required
-        - Dictionary keys/values are valid strings
-    """
-
-def get_defaults() -> AppConfig:
-    """
-    Get default configuration from config.py.
-    
-    Returns:
-        AppConfig: Default configuration object
-    
-    Behavior:
-        1. Import values from config.py
-        2. Add hardcoded UI defaults
-        3. Add new parameter defaults
-        4. Return AppConfig instance
-    """
-
-def reset_to_defaults() -> bool:
-    """
-    Reset configuration to defaults and save.
-    
-    Returns:
-        bool: True if reset successful
-    
-    Behavior:
-        1. Get defaults using get_defaults()
-        2. Save defaults using save_config()
-        3. Return success status
-    """
+ENUMERATION_API_URL = os.getenv("ENUMERATION_API_URL", "http://localhost:8080/api/enumeration")
+WORKER_API_URL      = os.getenv("WORKER_API_URL",      "http://localhost:8080/api/enumeration-worker")
+CONFIG_API_URL      = os.getenv("CONFIG_API_URL",      "http://localhost:8080/api/config")
 ```
 
-### 2. Settings Page (`pages/settings.py`)
-
-The settings page provides the UI for viewing and editing configuration.
-
-#### Page Structure
+Public interface (all functions raise `APIError` on non-2xx responses):
 
 ```python
-def render_settings_page():
-    """
-    Main entry point for settings page.
-    
-    Layout:
-        1. Page header and description
-        2. Action buttons (Save, Reset All)
-        3. Configuration sections (tabs or expanders)
-        4. Status messages (success/error)
-    """
+# Buckets
+def search_buckets(criteria: dict) -> list[dict]
+def create_bucket(payload: dict) -> dict
+def update_bucket(bucket_id: str, payload: dict) -> dict
+def delete_bucket(bucket_id: str) -> dict
 
-def render_buckets_section(config: AppConfig):
-    """
-    Render UI for editing BUCKETS list.
-    
-    Controls:
-        - Display current buckets as editable rows
-        - Add new bucket button
-        - Remove bucket button for each row
-        - Min/max number inputs for each bucket
-    """
+# SKUs
+def search_skus(criteria: dict) -> list[dict]
+def create_or_update_sku(payload: dict) -> dict
+def delete_sku(sku_id: str) -> dict
+def batch_import_skus(skus: list[dict], validate_only: bool = False) -> dict
 
-def render_illegal_pairs_section(config: AppConfig):
-    """
-    Render UI for editing ILLEGAL_PAIRS dictionary.
-    
-    Controls:
-        - Display current pairs as editable rows
-        - Add new pair button
-        - Remove pair button for each row
-        - Text inputs for part codes
-        - Multi-select for illegal partners
-    """
+# Cut Strategies
+def search_cut_strategies(criteria: dict) -> list[dict]
+def create_cut_strategy(payload: dict) -> dict
+def update_cut_strategy(strategy_id: str, payload: dict) -> dict
+def delete_cut_strategy(strategy_id: str) -> dict
 
-def render_defaults_section(config: AppConfig):
-    """
-    Render UI for editing Defaults parameters.
-    
-    Controls:
-        - trim_cap: slider (0-40)
-        - time_limit_sec: number input (10-600)
-        - gap: number input (0.0-0.05)
-        - chunk_size: number input (5-50)
-    """
+# Mixes
+def search_mixes(criteria: dict) -> list[dict]
 
-def render_ui_parameters_section(config: AppConfig):
-    """
-    Render UI for editing UI parameters.
-    
-    Controls:
-        - pieces_per_min: number input (100-2000)
-        - line_eff: number input (0.1-1.0)
-    """
+# Jobs
+def list_jobs(status_filter: str | None = None) -> list[dict]
+def get_job(job_id: str) -> dict
+def submit_job(payload: dict) -> dict
+def cancel_job(job_id: str) -> dict
 
-def render_new_parameters_section(config: AppConfig):
-    """
-    Render UI for editing new parameters.
-    
-    Controls:
-        - dsi_variance: number input
-        - lines: text area or multi-select
-        - cut_strategies: text area or multi-select
-        - trim_dollar_value: number input
-    """
+# Config
+def get_all_configs() -> list[dict]
+def update_config(key: str, payload: dict) -> dict
+def batch_update_configs(configs: list[dict], validate_only: bool = False) -> dict
 ```
 
-### 3. Modified Config Module (`portioning/config.py`)
+`APIError` carries the HTTP status code and the `detail` string from the response body, enabling pages to surface the exact backend error message.
 
-The existing config module will be updated to use the config manager.
+### Page Components
 
-```python
-# Import from config_manager instead of defining constants
-from portioning.config_manager import load_config
+Each page follows the same pattern:
+1. Load data from the API on page open (or on explicit Refresh).
+2. Display data in a `st.dataframe`.
+3. Provide create/edit/delete controls below or beside the table.
+4. Wrap all API calls in `try/except APIError` and call `st.error(e.detail)`.
 
-# Load configuration at module level
-_config = load_config()
+**Buckets page** — table of `_id`, `minWeight`, `maxWeight`; inline create/edit form with client-side validation (`minWeight < maxWeight`); delete with warning display.
 
-# Expose configuration as module-level constants for backward compatibility
-BUCKETS = _config.buckets
-ILLEGAL_PAIRS = _config.illegal_pairs
-DEFAULTS = Defaults(
-    trim_cap=_config.trim_cap,
-    time_limit_sec=_config.time_limit_sec,
-    gap=_config.gap,
-    chunk_size=_config.chunk_size
-)
+**SKUs page** — search form with `prodPlant`, `birdSize`, `customerType`, `productType` filters; full SKU table; create/edit form with weight validation; bulk import section accepting CSV/JSON upload.
 
-def reload_config():
-    """Reload configuration from file (called after settings save)."""
-    global _config, BUCKETS, ILLEGAL_PAIRS, DEFAULTS
-    _config = load_config()
-    BUCKETS = _config.buckets
-    ILLEGAL_PAIRS = _config.illegal_pairs
-    DEFAULTS = Defaults(
-        trim_cap=_config.trim_cap,
-        time_limit_sec=_config.time_limit_sec,
-        gap=_config.gap,
-        chunk_size=_config.chunk_size
-    )
-```
+**Cut Strategies page** — table of `name`, `mfgType`, `hasNugget`, `beltSpeed`, `parts`; create/edit form with `st.multiselect` for `PartCode` values; duplicate-parts validation; cascade delete summary.
 
-### 4. Modified UI Module (`portioning/ui.py`)
+**Mix Visualization page** — filter panel for all `MixSearchCriteria` fields; results table; expandable row detail showing full `skus` map.
 
-The UI module will be updated to use config manager for default values.
+**Mix Generation page** — job submission form; job list table with status badges; selected-job detail panel with stage progress; Cancel button gated on job status.
 
-```python
-from portioning.config_manager import load_config
+**Global Config page** — grouped config table (grouped by key prefix); inline edit with type-appropriate input controls; bounds enforcement; batch edit mode with validate-only option.
 
-def sidebar_controls(plants: Optional[list[str]], excel_sheets: tuple[str, ...]) -> UiState:
-    """
-    Render Streamlit sidebar controls.
-    
-    Changes:
-        - Load config using config_manager
-        - Use config values for defaults instead of hardcoded values
-        - Use config.pieces_per_min and config.line_eff
-    """
-    config = load_config()
-    
-    # Use config values for defaults
-    trim_cap = st.sidebar.slider(
-        "Trim % allowed",
-        min_value=0,
-        max_value=40,
-        value=config.trim_cap,  # From config instead of DEFAULTS.trim_cap
-        step=1,
-    )
-    
-    # ... rest of controls using config values ...
-```
+---
 
 ## Data Models
 
-### Configuration File Format (settings.json)
+The frontend works with the JSON representations of the backend Pydantic models. All field names use camelCase (the alias form) as serialized by the APIs.
 
+### Bucket
+```json
+{ "_id": "string", "minWeight": float, "maxWeight": float }
+```
+
+### SKU
 ```json
 {
-  "version": "1.0",
-  "buckets": [
-    [0, 324],
-    [325, 375],
-    [376, 475],
-    [476, 550],
-    [551, 625],
-    [626, 780],
-    [390, 480],
-    [481, 580]
-  ],
-  "illegal_pairs": {
-    "C": ["D"],
-    "D": ["C", "T"],
-    "R": ["V"],
-    "V": ["R"],
-    "M": ["K"],
-    "K": ["M"],
-    "T": ["D"]
-  },
-  "defaults": {
-    "trim_cap": 15,
-    "time_limit_sec": 60,
-    "gap": 0.002,
-    "chunk_size": 20
-  },
-  "ui_parameters": {
-    "pieces_per_min": 600.0,
-    "line_eff": 0.85
-  },
-  "new_parameters": {
-    "dsi_variance": 0.05,
-    "lines": ["Line1", "Line2", "Line3"],
-    "cut_strategies": ["Strategy1", "Strategy2"],
-    "trim_dollar_value": 1.5
-  }
+  "tradeNumber": "string", "customerName": "string", "customerType": "string",
+  "productType": "string", "unitsPerCut": int, "prodPlant": "string",
+  "minWeight": float, "maxWeight": float, "targetWeight": float,
+  "birdSize": "string", "allowedParts": ["string"]
 }
 ```
 
-### Validation Rules
-
-```python
-VALIDATION_RULES = {
-    "trim_cap": {
-        "type": int,
-        "min": 0,
-        "max": 100,
-        "description": "Trim percentage cap"
-    },
-    "time_limit_sec": {
-        "type": int,
-        "min": 10,
-        "max": 600,
-        "description": "CBC time limit in seconds"
-    },
-    "gap": {
-        "type": float,
-        "min": 0.0,
-        "max": 0.05,
-        "description": "CBC relative gap"
-    },
-    "chunk_size": {
-        "type": int,
-        "min": 5,
-        "max": 50,
-        "description": "Chunk size for processing"
-    },
-    "pieces_per_min": {
-        "type": float,
-        "min": 100.0,
-        "max": 2000.0,
-        "description": "Production pieces per minute"
-    },
-    "line_eff": {
-        "type": float,
-        "min": 0.1,
-        "max": 1.0,
-        "description": "Line efficiency factor"
-    },
-    "dsi_variance": {
-        "type": float,
-        "min": 0.0,
-        "max": 1.0,
-        "description": "DSI variance tolerance"
-    },
-    "trim_dollar_value": {
-        "type": float,
-        "min": 0.0,
-        "max": 100.0,
-        "description": "Dollar value per unit of trim"
-    }
+### CutStrategy
+```json
+{
+  "_id": "string", "name": "string", "description": "string",
+  "mfgType": "DSI|DB20", "hasNugget": bool, "beltSpeed": float,
+  "parts": ["D"|"R"|"M"|"T"|"V"|"K"|"S"|"U"|"C"|"J"|"W"|"G"]
 }
 ```
+
+### MIX
+```json
+{
+  "_id": "string", "skus": {"tradeNumber": "partCode"},
+  "includesFDS": bool, "includesRTL": bool, "includesNug": bool,
+  "nuggetTargetWeight": float|null, "numFillets": int, "filletWeight": float,
+  "mfgType": "DSI|DB20", "reqPlant": "string", "reqBirdSize": "SB|BB|ALL",
+  "cutStrategyID": "string", "beltSpeed": float
+}
+```
+
+### Job (JobStatusResponse)
+```json
+{
+  "jobId": "string", "status": "pending|running|completed|failed|cancelled",
+  "runId": "string", "createdAt": "datetime", "updatedAt": "datetime",
+  "startedAt": "datetime|null", "finishedAt": "datetime|null",
+  "skuCount": int, "maxCombinationSize": int,
+  "plantFilter": "string|null", "birdSizeFilter": "string|null",
+  "stages": [{"stage": int, "status": "string", "totalCombinations": int, "processedCombinations": int}],
+  "errorMessage": "string|null"
+}
+```
+
+### Config
+```json
+{
+  "key": "string", "value": int|float|str|bool,
+  "valueType": "int|float|string|bool", "description": "string",
+  "updatedAt": "datetime", "minValue": float|null, "maxValue": float|null
+}
+```
+
+### Client-Side Validation Rules
+
+| Entity | Rule |
+|---|---|
+| Bucket | `minWeight < maxWeight` |
+| SKU | `minWeight < maxWeight` and `minWeight <= targetWeight <= maxWeight` |
+| CutStrategy | `parts` list contains no duplicates |
+| Job | `1 <= maxCombinationSize <= 4`; `batchSize >= 1`; warn if both filters absent |
+| Config | value within `[minValue, maxValue]` when both are defined |
+
+---
 
 ## Correctness Properties
 
-*A property is a characteristic or behavior that should hold true across all valid executions of a system—essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-### Property 1: Configuration Load Fallback
-*For any* application startup, if settings.json does not exist or is invalid, then loading configuration should return default values from config.py without error.
-**Validates: Requirements 9.1, 10.5**
+### Property 1: API errors are always surfaced as messages
 
-### Property 2: Configuration Save Round-Trip
-*For any* valid AppConfig object, saving then loading the configuration should produce an equivalent configuration object.
-**Validates: Requirements 5.1, 5.2, 5.3**
+*For any* API client function call that raises an `APIError`, the page component that invoked it should display a non-empty error message to the user and not raise an unhandled exception.
 
-### Property 3: Validation Rejects Invalid Ranges
-*For any* numeric parameter with defined min/max ranges, validation should reject values outside those ranges and accept values within ranges.
-**Validates: Requirements 4.1, 4.3**
+**Validates: Requirements 1.4**
 
-### Property 4: Bucket Tuple Ordering
-*For any* bucket tuple (min, max), validation should reject the tuple if min >= max and accept if min < max.
-**Validates: Requirements 4.2**
+---
 
-### Property 5: Reset Restores Defaults
-*For any* modified configuration, calling reset_to_defaults() then loading configuration should return values equal to get_defaults().
-**Validates: Requirements 6.3, 6.4, 6.6**
+### Property 2: Bucket weight validation rejects invalid ranges
 
-### Property 6: Backward Compatibility Preservation
-*For any* existing code that references config.py constants (BUCKETS, ILLEGAL_PAIRS, DEFAULTS), those constants should have the same values as the loaded configuration.
-**Validates: Requirements 9.2, 9.3**
+*For any* pair `(minWeight, maxWeight)` where `minWeight >= maxWeight`, the bucket create/edit form validation function should return a validation error and not produce a valid payload.
 
-### Property 7: Configuration Type Consistency
-*For any* parameter in AppConfig, the loaded value should have the same type as the default value for that parameter.
-**Validates: Requirements 9.3**
+**Validates: Requirements 3.6**
 
-### Property 8: JSON Format Human Readability
-*For any* saved settings.json file, the file should be valid JSON with indentation and should be parseable by standard JSON tools.
-**Validates: Requirements 10.1, 10.2**
+---
+
+### Property 3: SKU weight validation enforces all three constraints
+
+*For any* triple `(minWeight, targetWeight, maxWeight)`, the SKU form validation function should accept the triple if and only if `minWeight < maxWeight` and `minWeight <= targetWeight <= maxWeight`.
+
+**Validates: Requirements 4.7**
+
+---
+
+### Property 4: CSV/JSON file parsing produces valid SKU payloads
+
+*For any* well-formed CSV or JSON file containing SKU records, parsing the file should produce a list of dicts where every record contains all required SKU fields with the correct types.
+
+**Validates: Requirements 4.5**
+
+---
+
+### Property 5: Cut strategy parts duplicate validation
+
+*For any* parts list submitted in the cut strategy form, the validation function should reject the list if and only if it contains duplicate `PartCode` values.
+
+**Validates: Requirements 5.7**
+
+---
+
+### Property 6: Job filter warning fires when both filters are absent
+
+*For any* job submission where both `plantFilter` and `birdSizeFilter` are absent (None or empty string), the form should produce a warning and not silently submit without it.
+
+**Validates: Requirements 7.4**
+
+---
+
+### Property 7: Job maxCombinationSize validation
+
+*For any* integer value `n`, the job form validation should accept `n` if and only if `1 <= n <= 4`.
+
+**Validates: Requirements 7.5**
+
+---
+
+### Property 8: Job batchSize validation
+
+*For any* integer value `n`, the job form validation should accept `n` if and only if `n >= 1`.
+
+**Validates: Requirements 7.6**
+
+---
+
+### Property 9: Cancel button visibility matches job status
+
+*For any* job, the Cancel button should be visible if and only if the job's status is `"pending"` or `"running"`. For jobs with status `"completed"`, `"failed"`, or `"cancelled"`, no Cancel button should be rendered.
+
+**Validates: Requirements 9.1, 9.4**
+
+---
+
+### Property 10: Config parameters are grouped by key prefix
+
+*For any* list of `Config` objects, the grouping function should partition them such that all configs whose key shares the same prefix (portion before the first `.`) appear in the same group, and configs with different prefixes appear in different groups.
+
+**Validates: Requirements 10.2**
+
+---
+
+### Property 11: Config input control type matches valueType
+
+*For any* `Config` object, the function that selects the input widget type should return a number input for `"int"`, a decimal input for `"float"`, a text input for `"string"`, and a checkbox for `"bool"`.
+
+**Validates: Requirements 11.1**
+
+---
+
+### Property 12: Config bounds enforcement
+
+*For any* `Config` object with `minValue` and/or `maxValue` defined, the bounds validation function should reject any submitted value that falls outside `[minValue, maxValue]` and accept any value within the range.
+
+**Validates: Requirements 11.2**
+
+---
 
 ## Error Handling
 
-### Configuration Loading Errors
+All API calls are wrapped in `try/except APIError`. The `APIError` class carries:
+- `status_code: int` — the HTTP status code
+- `detail: str` — the `detail` field from the JSON error body
 
-1. **File Not Found**: Fall back to defaults, log info message
-2. **Invalid JSON**: Fall back to defaults, log error with details
-3. **Schema Mismatch**: Use defaults for missing fields, log warning
-4. **Type Errors**: Fall back to defaults, log error
+Page components handle errors as follows:
 
-### Configuration Saving Errors
+| Scenario | Handling |
+|---|---|
+| Network error / timeout | `st.error("Could not reach [service name]. Check your connection.")` |
+| 404 Not Found | `st.warning("Resource not found.")` |
+| 409 Conflict | `st.error(e.detail)` — surfaces the backend conflict message |
+| 422 Validation | `st.error(e.detail)` — surfaces the backend validation message |
+| 500 Server Error | `st.error("Server error. Check backend logs.")` |
+| Client-side validation failure | `st.warning(message)` — shown inline before the API call is made |
 
-1. **Permission Denied**: Display error message to user, keep current config in memory
-2. **Disk Full**: Display error message, keep current config in memory
-3. **Invalid Path**: Create directory if needed, display error if creation fails
+The app never calls `st.stop()` on an API error; it displays the message and allows the user to retry.
 
-### Validation Errors
-
-1. **Out of Range**: Display specific error message with valid range
-2. **Type Mismatch**: Display error message with expected type
-3. **Invalid Structure**: Display error message with expected format
-4. **Empty Required Field**: Display error message indicating field is required
-
-### UI Error Handling
-
-1. **Concurrent Edits**: Use Streamlit session state to track unsaved changes
-2. **Navigation During Edit**: Warn user about unsaved changes
-3. **Invalid Input**: Disable save button until validation passes
-4. **Network Issues**: Not applicable (local file system)
+---
 
 ## Testing Strategy
 
-### Unit Testing
+### Dual Testing Approach
 
-Unit tests will verify specific examples, edge cases, and error conditions for individual functions.
+Both unit tests and property-based tests are required. Unit tests cover specific examples, integration points, and edge cases. Property tests verify universal correctness across randomized inputs.
 
-**Test Cases**:
-- Load config when settings.json exists with valid data
-- Load config when settings.json does not exist (fallback to defaults)
-- Load config when settings.json has invalid JSON (fallback to defaults)
-- Save config with valid data
-- Save config with invalid data (should fail validation)
-- Validate config with all valid parameters
-- Validate config with out-of-range numeric values
-- Validate config with invalid bucket tuples (min >= max)
-- Reset to defaults and verify all values match get_defaults()
-- Backward compatibility: verify config.py constants match loaded config
+### Unit Tests
 
-### Property-Based Testing
+Unit tests use `pytest` with `unittest.mock` to mock the API client. They cover:
+- Page load triggers the correct API call (one test per page)
+- Form submission with valid data triggers the correct API call
+- API error responses result in `st.error` being called with the correct message
+- Specific edge cases: empty search results, cascade delete summary display, job status badges, batch import summary display
 
-Property tests will verify universal properties across all inputs using a property-based testing library. Each test will run a minimum of 100 iterations with randomized inputs.
+For Streamlit component testing, use `streamlit.testing.v1.AppTest` to render pages and assert on rendered output.
 
-**Library**: Use `hypothesis` for Python property-based testing
+### Property-Based Tests
 
-**Property Test Cases**:
+Property tests use **Hypothesis** (the project already uses it, as evidenced by the `.hypothesis/` directory).
 
-1. **Configuration Round-Trip Property**
-   - Generate random valid AppConfig objects
-   - Save then load each config
-   - Verify loaded config equals original
-   - **Feature: streamlit-settings-page, Property 2: Configuration Save Round-Trip**
+Each property test runs a minimum of **100 iterations**.
 
-2. **Validation Range Property**
-   - Generate random numeric values (both valid and invalid)
-   - For each parameter with min/max, test validation
-   - Verify values in range pass, values out of range fail
-   - **Feature: streamlit-settings-page, Property 3: Validation Rejects Invalid Ranges**
+Tag format: `# Feature: streamlit-settings-page, Property {N}: {property_text}`
 
-3. **Bucket Ordering Property**
-   - Generate random bucket tuples with various min/max combinations
-   - Verify validation rejects when min >= max
-   - Verify validation accepts when min < max
-   - **Feature: streamlit-settings-page, Property 4: Bucket Tuple Ordering**
+| Property | Test Description |
+|---|---|
+| Property 1 | `@given(api_error())` — for any `APIError`, calling the page's error handler produces a non-empty string |
+| Property 2 | `@given(floats(), floats())` — validate_bucket_weights rejects when min >= max |
+| Property 3 | `@given(floats(), floats(), floats())` — validate_sku_weights accepts iff constraints hold |
+| Property 4 | `@given(lists(sku_record()))` — parse_sku_file round-trips through CSV and JSON |
+| Property 5 | `@given(lists(part_codes()))` — validate_parts_unique rejects iff duplicates present |
+| Property 6 | `@given(optional_str(), optional_str())` — warn_if_no_filters fires iff both are absent |
+| Property 7 | `@given(integers())` — validate_max_combination_size accepts iff 1 <= n <= 4 |
+| Property 8 | `@given(integers())` — validate_batch_size accepts iff n >= 1 |
+| Property 9 | `@given(job_status())` — cancel_button_visible returns True iff status in {pending, running} |
+| Property 10 | `@given(lists(config()))` — group_by_prefix partitions correctly by key prefix |
+| Property 11 | `@given(value_type())` — get_input_widget_type returns correct widget for each type |
+| Property 12 | `@given(config_with_bounds(), numeric_value())` — validate_config_bounds accepts iff within range |
 
-4. **Reset Idempotence Property**
-   - Generate random modified configs
-   - Call reset_to_defaults() then load_config()
-   - Verify result equals get_defaults()
-   - **Feature: streamlit-settings-page, Property 5: Reset Restores Defaults**
+Each property-based test must include a comment referencing the design property it validates, e.g.:
+```python
+# Feature: streamlit-settings-page, Property 2: Bucket weight validation rejects invalid ranges
+@given(st.floats(allow_nan=False), st.floats(allow_nan=False))
+def test_bucket_weight_validation(min_w, max_w):
+    ...
+```
 
-5. **Type Consistency Property**
-   - Generate random valid configs
-   - Save and load each config
-   - Verify each parameter type matches default type
-   - **Feature: streamlit-settings-page, Property 7: Configuration Type Consistency**
+### Test File Layout
 
-### Integration Testing
-
-Integration tests will verify the interaction between components:
-- Settings page UI updates when config changes
-- Main app reflects config changes after save
-- UI controls use correct default values from config
-- Navigation between pages preserves state
-
-### Manual Testing Checklist
-
-- [ ] Open settings page from main app
-- [ ] Edit each parameter type (numeric, list, dict, boolean)
-- [ ] Save changes and verify success message
-- [ ] Restart app and verify changes persisted
-- [ ] Reset individual parameter and verify default restored
-- [ ] Reset all parameters and verify all defaults restored
-- [ ] Enter invalid values and verify validation errors
-- [ ] Navigate away with unsaved changes and verify warning
-- [ ] Manually edit settings.json and verify app loads correctly
-- [ ] Delete settings.json and verify app uses defaults
+```
+streamlit-app/
+├── tests/
+│   ├── test_api_client.py          # Unit tests for API client
+│   ├── test_validation.py          # Unit + property tests for validation functions
+│   ├── test_pages_unit.py          # Unit tests for page components (mocked API)
+│   └── test_properties.py          # All property-based tests
+```

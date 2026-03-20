@@ -44,10 +44,9 @@ services:
   # Manages SKU data with search and retrieval capabilities
   enumeration-api:
     build:
-      # Build context is the enumeration-api directory
-      context: ./enumeration-api
-      # Use the Dockerfile in that directory
-      dockerfile: Dockerfile
+      # Build context is the repo root so Dockerfile can COPY ../enumeration-shared
+      context: .
+      dockerfile: enumeration-api/Dockerfile
     
     container_name: enumeration-api
     restart: always
@@ -73,8 +72,7 @@ services:
     # Changes to code are reflected without rebuilding container
     volumes:
       - ./enumeration-api:/app
-    
-    # Connect to custom network
+      - ./enumeration-shared:/shared
     networks:
       - mongo_net
     
@@ -208,14 +206,39 @@ services:
     networks:
       - mongo_net
 
+  # Streamlit Frontend
+  streamlit-app:
+    build:
+      context: ./streamlit-app
+      dockerfile: Dockerfile
+
+    container_name: streamlit-app
+    restart: always
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
+      WORKER_API_URL: http://api-gateway:80/api/enumeration-worker
+      CONFIG_API_URL: http://api-gateway:80/api/config
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      api-gateway:
+        condition: service_started
+
   # Enumeration Worker API Service
   # Dedicated microservice for submitting and monitoring long-running enumeration jobs.
   # Exposes a REST API (POST /jobs, GET /jobs/{id}, POST /jobs/{id}/cancel).
   # Runs the enumeration in a background thread and writes results + job status to MongoDB.
   enumeration-worker-api:
     build:
-      context: ./enumeration-worker-api
-      dockerfile: Dockerfile
+      # Build context is the repo root so Dockerfile can COPY ../enumeration-shared
+      context: .
+      dockerfile: enumeration-worker-api/Dockerfile
 
     container_name: enumeration-worker-api
     restart: always
@@ -231,6 +254,7 @@ services:
 
     volumes:
       - ./enumeration-worker-api:/app
+      - ./enumeration-shared:/shared
 
     networks:
       - mongo_net

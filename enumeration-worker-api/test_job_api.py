@@ -4,7 +4,9 @@ Uses mongomock so no real MongoDB is needed.
 """
 
 import sys
+import time
 from pathlib import Path
+
 import mongomock
 from fastapi.testclient import TestClient
 
@@ -33,7 +35,7 @@ client = TestClient(app)
 # ---------------------------------------------------------------------------
 
 def _seed_db():
-    """Insert the minimum data the engine needs: skus + buckets."""
+    """Insert the minimum data the engine needs: scoped skus + buckets."""
     db = _mock_client["enumeration_db"]
     db["skus"].drop()
     db["buckets"].drop()
@@ -45,16 +47,42 @@ def _seed_db():
             "_id": "100", "tradeNumber": "100", "targetWeight": 100.0,
             "minWeight": 80.0, "maxWeight": 120.0,
             "customerType": "FDS", "productType": "NUGGET", "allowedParts": ["D"],
+            "prodPlant": "P1", "birdSize": "L",
         },
         {
             "_id": "200", "tradeNumber": "200", "targetWeight": 200.0,
             "minWeight": 170.0, "maxWeight": 240.0,
             "customerType": "RTL", "productType": "FILET", "allowedParts": ["R"],
+            "prodPlant": "P1", "birdSize": "L",
+        },
+        {
+            "_id": "300", "tradeNumber": "300", "targetWeight": 140.0,
+            "minWeight": 120.0, "maxWeight": 170.0,
+            "customerType": "RTL", "productType": "FILET", "allowedParts": ["M"],
+            "prodPlant": "P1", "birdSize": "L",
+        },
+        {
+            "_id": "400", "tradeNumber": "400", "targetWeight": 110.0,
+            "minWeight": 90.0, "maxWeight": 130.0,
+            "customerType": "RTL", "productType": "FILET", "allowedParts": ["T"],
+            "prodPlant": "P1", "birdSize": "L",
         },
     ])
     db["buckets"].insert_many([
-        {"_id": "b1", "minWeight": 50.0, "maxWeight": 350.0},
+        {"_id": "b1", "minWeight": 50.0, "maxWeight": 500.0},
     ])
+
+
+def _wait_for_terminal_status(job_id: str, timeout_seconds: float = 4.0) -> dict:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        resp = client.get(f"/jobs/{job_id}")
+        assert resp.status_code == 200
+        body = resp.json()
+        if body["status"] in ("completed", "failed", "cancelled"):
+            return body
+        time.sleep(0.05)
+    raise AssertionError(f"Job {job_id} did not reach a terminal status within timeout")
 
 
 # ---------------------------------------------------------------------------
@@ -67,19 +95,42 @@ def test_health():
     assert resp.json()["status"] == "healthy"
 
 
-def test_submit_and_poll_job():
+def test_submit_and_poll_job_with_filters():
     _seed_db()
-    # Submit
-    resp = client.post("/jobs", json={"runId": "test-run", "maxCombinationSize": 2, "batchSize": 10})
+    resp = client.post(
+        "/jobs",
+        json={
+            "runId": "test-run",
+            "maxCombinationSize": 4,
+            "batchSize": 10,
+            "plantFilter": "P1",
+            "birdSizeFilter": "L",
+        },
+    )
     assert resp.status_code == 202
-    body = resp.json()
-    assert body["status"] in ("pending", "running", "completed")
-    job_id = body["jobId"]
+    job_id = resp.json()["jobId"]
 
-    # Poll until done (TestClient runs synchronously in the same thread, so we may get completed)
-    resp2 = client.get(f"/jobs/{job_id}")
-    assert resp2.status_code == 200
-    assert resp2.json()["jobId"] == job_id
+    terminal = _wait_for_terminal_status(job_id)
+    assert terminal["status"] == "completed"
+    assert terminal["skuCount"] == 4
+    assert [s["totalCombinations"] for s in terminal["stages"]] == [4, 6, 4, 1]
+
+    results = list(_mock_client["enumeration_db"]["enumeration_results"].find({"runId": "test-run"}))
+    assert len(results) == 15
+
+
+def test_submit_job_without_filters_is_failed():
+    _seed_db()
+    resp = client.post(
+        "/jobs",
+        json={"runId": "no-filters", "maxCombinationSize": 4, "batchSize": 10},
+    )
+    assert resp.status_code == 202
+    job_id = resp.json()["jobId"]
+
+    terminal = _wait_for_terminal_status(job_id)
+    assert terminal["status"] == "failed"
+    assert "at least one filter" in (terminal.get("errorMessage") or "")
 
 
 def test_list_jobs():
@@ -105,5 +156,4 @@ def test_openapi_schema():
     assert "/jobs" in paths
     assert "/jobs/{job_id}" in paths
     assert "/jobs/{job_id}/cancel" in paths
-
 

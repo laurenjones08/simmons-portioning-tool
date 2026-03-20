@@ -3,8 +3,8 @@ from typing import List, Optional
 from bson import ObjectId
 from pydantic import BaseModel, Field, field_validator
 
-from models.mix import MfgType
-from models.partCode import PartCode
+from .part_code import PartCode
+from .mix import MfgType
 
 
 class CutStrategyBase(BaseModel):
@@ -14,7 +14,7 @@ class CutStrategyBase(BaseModel):
     description: Optional[str] = Field(None, alias="description", max_length=500)
     mfg_type: MfgType = Field(..., alias="mfgType")
     has_nugget: bool = Field(..., alias="hasNugget")
-    belt_speed: float = Field(..., alias="beltSpeed", ge=0.0)
+    belt_speed: float = Field(..., alias="beltSpeed", ge=0.0) # Belt speed in feet per hour (FPH)
     parts: List[PartCode] = Field(..., alias="parts", min_length=1)
 
     @field_validator("parts")
@@ -36,12 +36,12 @@ class CutStrategyCreate(CutStrategyBase):
         "populate_by_name": True,
         "json_schema_extra": {
             "example": {
-                "name": "DSI Standard SB",
-                "description": "Primary DSI strategy for SB birds",
+                "name": "DSI 2 for 1",
+                "description": "DSI 2 filet strategy",
                 "mfgType": "DSI",
-                "hasNugget": True,
-                "beltSpeed": 1.2,
-                "parts": ["D", "R", "M"],
+                "hasNugget": False,
+                "beltSpeed": 350.0,
+                "parts": ["D", "R"],
             }
         },
     }
