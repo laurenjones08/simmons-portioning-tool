@@ -31,6 +31,8 @@ def build_model(P_set, T_set, K_set, L_set,
     m.L = Set(initialize=list(L_set), ordered=True)
 
 
+#Ignore Errors (They Are Working, No Clue Why Error)
+
     # Parameters
     m.WIP = Param(m.T, initialize=WIP, within=NonNegativeReals)
     m.D   = Param(m.P, m.T, initialize=D, within=NonNegativeReals)
