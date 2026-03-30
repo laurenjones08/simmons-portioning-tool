@@ -62,8 +62,8 @@ def get_model_inputs():
 
     # --- Lag (how many days demand can be delayed) ---
     L_delay = {
-        "A": 1,
-        "B": 1,
+        "A": 0,
+        "B": 0,
     }
 
     # --- Objective weights ---
