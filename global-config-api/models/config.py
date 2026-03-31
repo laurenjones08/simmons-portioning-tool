@@ -13,7 +13,7 @@ All models use Pydantic for automatic validation and serialization.
 """
 
 from typing import Union, Optional, List, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
 from datetime import datetime
 
@@ -112,14 +112,12 @@ class Config(BaseModel):
         description="Maximum value constraint for numeric types (int, float)"
     )
     
-    @field_validator('value')
-    @classmethod
-    def validate_value_matches_type(cls, v: Union[int, str, float, bool], info) -> Union[int, str, float, bool]:
+    @model_validator(mode='after')
+    def validate_value_and_range(self):
         """
-        Validate that the value matches the declared valueType.
+        Validate that the value matches the declared valueType and is within range constraints.
         
-        This ensures type consistency between the value and its declared type.
-        For example, if valueType is "int", the value must be an integer.
+        This validator runs after all fields are populated, ensuring value_type is available.
         
         Type Mapping:
         - INT: Python int
@@ -127,73 +125,42 @@ class Config(BaseModel):
         - FLOAT: Python int or float (int is acceptable for float type)
         - BOOL: Python bool
         
-        Args:
-            v: The value being validated
-            info: Validation context containing other field values
-            
         Returns:
-            The validated value
+            The validated model instance
             
         Raises:
-            ValueError: If value type doesn't match valueType
+            ValueError: If value type doesn't match valueType or is outside range
         """
-        if 'value_type' not in info.data:
-            return v
+        # Validate value type matches valueType
+        value_type = self.value_type
+        v = self.value
         
-        value_type = info.data['value_type']
-        
-        # Define expected Python types for each ValueType
-        type_map = {
-            ValueType.INT: int,
-            ValueType.STRING: str,
-            ValueType.FLOAT: (int, float),  # Accept both int and float for FLOAT type
-            ValueType.BOOL: bool
-        }
-        
-        expected_type = type_map[value_type]
-        
-        # Check if value is of the expected type
-        if not isinstance(v, expected_type):
-            # Special case: bool is a subclass of int in Python, so we need to check bool first
-            if value_type == ValueType.INT and isinstance(v, bool):
+        # Special case: bool is a subclass of int in Python, so we need to check bool first
+        if isinstance(v, bool):
+            if value_type != ValueType.BOOL:
                 raise ValueError(f'Value must be of type {value_type.value}, got bool')
-            raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.INT:
+            if not isinstance(v, int):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.STRING:
+            if not isinstance(v, str):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.FLOAT:
+            if not isinstance(v, (int, float)):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.BOOL:
+            if not isinstance(v, bool):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
         
-        return v
-    
-    @field_validator('value')
-    @classmethod
-    def validate_numeric_range(cls, v: Union[int, str, float, bool], info) -> Union[int, str, float, bool]:
-        """
-        Validate that numeric values are within minValue/maxValue constraints.
-        
-        This validator only applies to numeric types (int, float). If minValue or maxValue
-        are specified, the value must fall within that range (inclusive).
-        
-        Args:
-            v: The value being validated
-            info: Validation context containing other field values
+        # Validate numeric range if applicable (only for int and float, not bool)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if self.min_value is not None and v < self.min_value:
+                raise ValueError(f'Value {v} is below minimum {self.min_value}')
             
-        Returns:
-            The validated value
-            
-        Raises:
-            ValueError: If numeric value is outside the specified range
-        """
-        # Only validate numeric types
-        if not isinstance(v, (int, float)) or isinstance(v, bool):
-            return v
+            if self.max_value is not None and v > self.max_value:
+                raise ValueError(f'Value {v} exceeds maximum {self.max_value}')
         
-        min_val = info.data.get('min_value')
-        max_val = info.data.get('max_value')
-        
-        if min_val is not None and v < min_val:
-            raise ValueError(f'Value {v} is below minimum {min_val}')
-        
-        if max_val is not None and v > max_val:
-            raise ValueError(f'Value {v} exceeds maximum {max_val}')
-        
-        return v
+        return self
     
     @field_validator('max_value')
     @classmethod
@@ -292,56 +259,43 @@ class ConfigUpdate(BaseModel):
         description="Maximum value constraint for numeric types (int, float)"
     )
     
-    @field_validator('value')
-    @classmethod
-    def validate_value_matches_type(cls, v: Union[int, str, float, bool], info) -> Union[int, str, float, bool]:
+    @model_validator(mode='after')
+    def validate_value_and_range(self):
         """
-        Validate that the value matches the declared valueType.
+        Validate that the value matches the declared valueType and is within range constraints.
         
-        See Config.validate_value_matches_type for detailed documentation.
+        See Config.validate_value_and_range for detailed documentation.
         """
-        if 'value_type' not in info.data:
-            return v
+        # Validate value type matches valueType
+        value_type = self.value_type
+        v = self.value
         
-        value_type = info.data['value_type']
-        
-        type_map = {
-            ValueType.INT: int,
-            ValueType.STRING: str,
-            ValueType.FLOAT: (int, float),
-            ValueType.BOOL: bool
-        }
-        
-        expected_type = type_map[value_type]
-        
-        if not isinstance(v, expected_type):
-            if value_type == ValueType.INT and isinstance(v, bool):
+        # Special case: bool is a subclass of int in Python, so we need to check bool first
+        if isinstance(v, bool):
+            if value_type != ValueType.BOOL:
                 raise ValueError(f'Value must be of type {value_type.value}, got bool')
-            raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.INT:
+            if not isinstance(v, int):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.STRING:
+            if not isinstance(v, str):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.FLOAT:
+            if not isinstance(v, (int, float)):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
+        elif value_type == ValueType.BOOL:
+            if not isinstance(v, bool):
+                raise ValueError(f'Value must be of type {value_type.value}, got {type(v).__name__}')
         
-        return v
-    
-    @field_validator('value')
-    @classmethod
-    def validate_numeric_range(cls, v: Union[int, str, float, bool], info) -> Union[int, str, float, bool]:
-        """
-        Validate that numeric values are within minValue/maxValue constraints.
+        # Validate numeric range if applicable (only for int and float, not bool)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if self.min_value is not None and v < self.min_value:
+                raise ValueError(f'Value {v} is below minimum {self.min_value}')
+            
+            if self.max_value is not None and v > self.max_value:
+                raise ValueError(f'Value {v} exceeds maximum {self.max_value}')
         
-        See Config.validate_numeric_range for detailed documentation.
-        """
-        if not isinstance(v, (int, float)) or isinstance(v, bool):
-            return v
-        
-        min_val = info.data.get('min_value')
-        max_val = info.data.get('max_value')
-        
-        if min_val is not None and v < min_val:
-            raise ValueError(f'Value {v} is below minimum {min_val}')
-        
-        if max_val is not None and v > max_val:
-            raise ValueError(f'Value {v} exceeds maximum {max_val}')
-        
-        return v
+        return self
     
     @field_validator('max_value')
     @classmethod

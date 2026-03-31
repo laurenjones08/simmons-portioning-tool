@@ -15,6 +15,10 @@ class MixRepository:
             unique=True,
             name="uniq_mfg_type_sku_set_key",
         )
+        self.collection.create_index(
+            [("skuKeys", 1)],
+            name="idx_mix_sku_keys",
+        )
 
     def create(self, mix_document: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -71,3 +75,22 @@ class MixRepository:
             return result.deleted_count
         except PyMongoError as exc:
             raise Exception(f"Database error deleting mixes by SKU: {exc}")
+
+    def get_ids_by_cut_strategy_id(self, cut_strategy_id: str) -> List[str]:
+        """Return mix IDs that reference a given cut strategy id."""
+        try:
+            cursor = self.collection.find(
+                {"cutStrategyID": cut_strategy_id},
+                {"_id": 1},
+            )
+            return [doc["_id"] for doc in cursor]
+        except PyMongoError as exc:
+            raise Exception(f"Database error listing mixes by cut strategy: {exc}")
+
+    def delete_by_cut_strategy_id(self, cut_strategy_id: str) -> int:
+        """Delete all mixes that reference a given cut strategy id."""
+        try:
+            result = self.collection.delete_many({"cutStrategyID": cut_strategy_id})
+            return result.deleted_count
+        except PyMongoError as exc:
+            raise Exception(f"Database error deleting mixes by cut strategy: {exc}")
