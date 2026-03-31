@@ -1,0 +1,4 @@
+decision,line,shift,assigned_lbs,nonpreferred
+pack,Line1,1,520.0,1
+pack,Line1,2,462.857,1
+pack,Line1,3,620.0,1

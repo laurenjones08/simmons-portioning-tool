@@ -1,0 +1,8 @@
+decision,line,shift,assigned_lbs
+cut,Line1,2,221.429
+pack,Line1,1,520.0
+pack,Line1,2,462.857
+pack,Line1,3,620.0
+pack,Line2,1,480.0
+pack,Line2,2,480.0
+pack,Line2,3,480.0

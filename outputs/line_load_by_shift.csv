@@ -1,0 +1,7 @@
+shift,line,total_input_lbs,hours_used,hours_available,util_pct
+1,Line1,520.0,6.5,8.0,81.2
+1,Line2,480.0,6.0,6.0,100.0
+2,Line1,684.29,8.0,8.0,100.0
+2,Line2,480.0,6.0,6.0,100.0
+3,Line1,620.0,7.75,8.0,96.9
+3,Line2,480.0,6.0,6.0,100.0
