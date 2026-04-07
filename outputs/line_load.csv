@@ -1,7 +1,0 @@
-line,day,hours_used,hours_available,util_pct
-line1,1,6.5,8,81.2
-line1,2,8.0,8,100.0
-line1,3,7.75,8,96.9
-line2,1,6.0,6,100.0
-line2,2,6.0,6,100.0
-line2,3,6.0,6,100.0

@@ -4,9 +4,9 @@ from solver import solve_model, check_solution
 from results import extract_all_results, save_results
 
 
-def run_pipeline(save_csv=True, output_dir="outputs", tee=False):
+def run_pipeline(short_term_file=None, save_csv=True, output_dir="outputs", tee=False):
     # 1. Load / prepare inputs
-    inputs = get_model_inputs()
+    inputs = get_model_inputs(short_term_file=short_term_file)
 
     # 2. Build model
     model = build_model(
@@ -14,13 +14,15 @@ def run_pipeline(save_csv=True, output_dir="outputs", tee=False):
         inputs["T"],
         inputs["K"],
         inputs["L"],
+        inputs["B"],
         WIP=inputs["WIP"],
-        D=inputs["D"],
+        D_eff=inputs["D_eff"],
         Y=inputs["Y"],
         V=inputs["V"],
         R=inputs["R"],
         H=inputs["H"],
         A=inputs["A"],
+        bucket_of_k=inputs["bucket_of_k"],
         L_delay=inputs["L_delay"],
         gamma=inputs["gamma"],
         beta=inputs["beta"],

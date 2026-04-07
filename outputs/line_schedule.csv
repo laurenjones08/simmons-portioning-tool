@@ -1,7 +1,0 @@
-shift,line,cuts
-1,Line1,pack (520 lbs)
-1,Line2,pack (480 lbs)
-2,Line1,"cut (221 lbs), pack (463 lbs)"
-2,Line2,pack (480 lbs)
-3,Line1,pack (620 lbs)
-3,Line2,pack (480 lbs)

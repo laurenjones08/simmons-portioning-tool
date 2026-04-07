@@ -2,7 +2,17 @@ from pipeline import run_pipeline
 
 
 def main():
-    results = run_pipeline(save_csv=True, output_dir="outputs", tee=True)
+    # Put your weekly short-term demand Excel file path here.
+    # If you want to test long-term demand only, leave this as None.
+    short_term_file = None
+    # short_term_file = "data/short_term_demand.xlsx"
+
+    results = run_pipeline(
+        short_term_file=short_term_file,
+        save_csv=True,
+        output_dir="outputs",
+        tee=True
+    )
 
     print("Model solved successfully.\n")
 
@@ -23,6 +33,9 @@ def main():
 
     print("nonpreferred_usage:")
     print(results["outputs"]["nonpreferred_usage"].head(20), "\n")
+
+    print("bucket_usage_by_shift:")
+    print(results["outputs"]["bucket_usage_by_shift"].head(20), "\n")
 
     print("All outputs written to: outputs")
 
