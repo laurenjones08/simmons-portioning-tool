@@ -35,6 +35,11 @@ from api_client import (
     get_all_configs,
     update_config,
     batch_update_configs,
+    list_lines,
+    get_active_lines,
+    create_line,
+    update_line,
+    delete_line,
 )
 
 
@@ -157,7 +162,7 @@ class TestBucketFunctions:
 
     @patch("api_client.requests.request")
     def test_create_bucket(self, mock_req):
-        payload = {"minWeight": 1.0, "maxWeight": 2.0}
+        payload = {"minWeight": 1.0, "targetWeight": 1.5, "maxWeight": 2.0}
         mock_req.return_value = _mock_response(201, {"_id": "abc", **payload})
         result = create_bucket(payload)
         args, kwargs = mock_req.call_args
@@ -168,7 +173,7 @@ class TestBucketFunctions:
     @patch("api_client.requests.request")
     def test_update_bucket(self, mock_req):
         mock_req.return_value = _mock_response(200, {"_id": "abc"})
-        result = update_bucket("abc", {"minWeight": 1.5})
+        result = update_bucket("abc", {"minWeight": 1.5, "targetWeight": 1.8, "maxWeight": 2.2})
         args, _ = mock_req.call_args
         assert args[0] == "PUT"
         assert "abc" in args[1]
@@ -235,7 +240,8 @@ class TestSKUFunctions:
         result = batch_import_skus([{"tradeNumber": "T1"}, {"tradeNumber": "T2"}])
         args, kwargs = mock_req.call_args
         assert "skus/batch" in args[1]
-        assert len(kwargs["json"]) == 2
+        assert len(kwargs["json"]["skus"]) == 2
+        assert kwargs["json"]["validateOnly"] is False
         assert result["total"] == 2
 
 
@@ -354,27 +360,109 @@ class TestConfigFunctions:
 
     @patch("api_client.requests.request")
     def test_update_config(self, mock_req):
+        payload = {
+            "value": 42,
+            "valueType": "int",
+            "description": "Test config",
+            "minValue": 0,
+            "maxValue": 100,
+        }
         mock_req.return_value = _mock_response(200, {"key": "k1", "value": 42})
-        result = update_config("k1", {"value": 42})
-        args, _ = mock_req.call_args
+        result = update_config("k1", payload)
+        args, kwargs = mock_req.call_args
         assert args[0] == "PUT"
         assert "k1" in args[1]
+        assert kwargs["json"] == payload
+        assert result["value"] == 42
 
     @patch("api_client.requests.request")
     def test_batch_update_configs(self, mock_req):
         mock_req.return_value = _mock_response(200, {"total": 2, "successful": 2})
-        result = batch_update_configs([{"key": "k1", "value": 1}])
+        configs = [{
+            "key": "k1",
+            "update": {
+                "value": 1,
+                "valueType": "int",
+                "description": "desc",
+                "minValue": 0,
+                "maxValue": 10,
+            },
+        }]
+        result = batch_update_configs(configs)
         args, kwargs = mock_req.call_args
         assert args[0] == "POST"
         assert "batch" in args[1]
-        assert kwargs.get("params", {}).get("validateOnly") is None
+        assert kwargs["json"] == {"configs": configs, "validateOnly": False}
+        assert result == {"total": 2, "successful": 2}
 
     @patch("api_client.requests.request")
     def test_batch_update_configs_validate_only(self, mock_req):
         mock_req.return_value = _mock_response(200, {"valid": True})
-        batch_update_configs([{"key": "k1", "value": 1}], validate_only=True)
+        configs = [{
+            "key": "k1",
+            "update": {
+                "value": 1,
+                "valueType": "int",
+                "description": "desc",
+                "minValue": 0,
+                "maxValue": 10,
+            },
+        }]
+        batch_update_configs(configs, validate_only=True)
         _, kwargs = mock_req.call_args
-        assert kwargs["params"]["validateOnly"] == "true"
+        assert kwargs["json"] == {"configs": configs, "validateOnly": True}
+        assert "params" not in kwargs
+
+
+class TestLineFunctions:
+    @patch("api_client.requests.request")
+    def test_list_lines(self, mock_req):
+        mock_req.return_value = _mock_response(200, [{"lineId": "DSI884"}])
+        result = list_lines()
+        args, _ = mock_req.call_args
+        assert args[0] == "GET"
+        assert args[1].endswith("/lines")
+        assert result == [{"lineId": "DSI884"}]
+
+    @patch("api_client.requests.request")
+    def test_get_active_lines(self, mock_req):
+        mock_req.return_value = _mock_response(200, [{"lineId": "DSI884", "isActive": True}])
+        result = get_active_lines()
+        args, _ = mock_req.call_args
+        assert args[0] == "GET"
+        assert args[1].endswith("/lines/active")
+        assert result[0]["isActive"] is True
+
+    @patch("api_client.requests.request")
+    def test_create_line(self, mock_req):
+        payload = {"lineId": "DSI884", "friendlyName": "DSI 884", "lineType": "DSI884", "plant": "FSP", "permittedCutStrategyIds": []}
+        mock_req.return_value = _mock_response(201, payload)
+        result = create_line(payload)
+        args, kwargs = mock_req.call_args
+        assert args[0] == "POST"
+        assert args[1].endswith("/lines")
+        assert kwargs["json"] == payload
+        assert result["lineId"] == "DSI884"
+
+    @patch("api_client.requests.request")
+    def test_update_line(self, mock_req):
+        payload = {"friendlyName": "DSI 884", "lineType": "DSI884", "plant": "FSP", "isActive": True, "permittedCutStrategyIds": []}
+        mock_req.return_value = _mock_response(200, {"lineId": "DSI884"})
+        result = update_line("DSI884", payload)
+        args, kwargs = mock_req.call_args
+        assert args[0] == "PUT"
+        assert args[1].endswith("/lines/DSI884")
+        assert kwargs["json"] == payload
+        assert result["lineId"] == "DSI884"
+
+    @patch("api_client.requests.request")
+    def test_delete_line(self, mock_req):
+        mock_req.return_value = _mock_response(200, {"deleted": True})
+        result = delete_line("DSI884")
+        args, _ = mock_req.call_args
+        assert args[0] == "DELETE"
+        assert args[1].endswith("/lines/DSI884")
+        assert result["deleted"] is True
 
 
 # ---------------------------------------------------------------------------

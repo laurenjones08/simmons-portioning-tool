@@ -13,7 +13,6 @@ This JavaScript file automatically runs when MongoDB starts with a fresh data vo
 #### Enumeration Database (`enumeration_db`)
 - **Collection**: `skus`
 - **Purpose**: Stores SKU (Stock Keeping Unit) product data
-- **Schema Validation**: Moderate validation with warnings
 - **Indexes Created** (6 total):
   - `_id_` - Default unique index on trade number
   - `idx_customer_type` - Fast lookups by customer type
@@ -25,14 +24,17 @@ This JavaScript file automatically runs when MongoDB starts with a fresh data vo
 #### Config Database (`config_db`)
 - **Collection**: `global_config`
 - **Purpose**: Stores system configuration key-value pairs
-- **Schema Validation**: Moderate validation with warnings
 - **Indexes Created** (3 total):
   - `_id_` - Default unique index on configuration key
   - `idx_value_type` - Fast filtering by value type
   - `idx_updated_at` - Descending sort by update timestamp
 - **Default Configuration Values**:
-  - `enumeration.defaultMaxTrim`: 2 (int) - Default max trim for SKU selection
+  - `enumeration.defaultMaxTrim`: 15 (int) - Default max trim for SKU selection
   - `enumeration.defaultMinTargetDelta`: 0.5 (float) - Default min target weight delta
+  - `enumeration.bucketWeightTolerancePct`: 0.0 (float) - Bucket fit tolerance percent
+  - `enumeration.fdsValueCoefficient`: 0.0 (float) - Mix value coefficient for FDS weight
+  - `enumeration.rtlValueCoefficient`: 0.0 (float) - Mix value coefficient for RTL weight
+  - `enumeration.trimValueCoefficient`: 0.0 (float) - Mix value coefficient for trim weight
   - `system.enableDebugLogging`: false (bool) - Debug logging flag
   - `system.serviceName`: "Simmons Portioning Tool" (string) - Application name
 
@@ -71,13 +73,17 @@ enumeration_db:
   - skus (0 documents, 6 indexes)
 
 config_db:
-  - global_config (4 documents, 3 indexes)
+  - global_config (11 documents, 3 indexes)
 ```
 
 ### ✅ Default Configuration Loaded
 ```
-- enumeration.defaultMaxTrim: 2 (int)
+- enumeration.defaultMaxTrim: 15 (int)
 - enumeration.defaultMinTargetDelta: 0.5 (float)
+- enumeration.bucketWeightTolerancePct: 0.0 (float)
+- enumeration.fdsValueCoefficient: 0.0 (float)
+- enumeration.rtlValueCoefficient: 0.0 (float)
+- enumeration.trimValueCoefficient: 0.0 (float)
 - system.enableDebugLogging: false (bool)
 - system.serviceName: Simmons Portioning Tool (string)
 ```
@@ -93,7 +99,7 @@ config_db:
 1. **First-Time Only**: The initialization script runs ONLY when MongoDB starts with an empty data directory
 2. **Automatic Execution**: MongoDB looks for scripts in `/docker-entrypoint-initdb.d/` and executes them
 3. **Persistent Setup**: Once initialized, the databases and collections persist in the Docker volume
-4. **Schema Validation**: Documents are validated on insert/update with "warn" action (logs warnings but allows operations)
+4. **Persistent Setup**: Collections and indexes remain in the MongoDB volume once initialized
 
 ## Common Operations
 
@@ -143,7 +149,7 @@ use config_db
 db.global_config.find().pretty()
 ```
 
-## Schema Validation Details
+## Document Shape Notes
 
 ### SKU Schema
 Required fields:
@@ -159,7 +165,7 @@ Required fields:
 - `targetWeight` (double, min: 0)
 - `allowedParts` (array of strings, min items: 1)
 
-### Config Schema
+### Config Documents
 Required fields:
 - `_id` (string) - Configuration key
 - `key` (string)
@@ -217,16 +223,10 @@ docker compose down -v
 docker compose up -d
 ```
 
-### Issue: Schema Validation Errors
-**Solution**: Check validation is set to "warn" mode (logs but doesn't block). Review MongoDB logs:
-```powershell
-docker logs mongodb --tail 50
-```
-
 ## Benefits
 
 1. ✅ **Zero Manual Setup** - Databases and collections created automatically
-2. ✅ **Consistent Schema** - Schema validation ensures data quality
+2. ✅ **Consistent Setup** - Collections, indexes, and defaults are reproducible
 3. ✅ **Optimized Performance** - Pre-created indexes for common queries
 4. ✅ **Default Configuration** - System ready to use immediately
 5. ✅ **Version Controlled** - Initialization script tracked in Git
@@ -247,8 +247,8 @@ docker-compose.yml         # Updated volume mount (MODIFIED)
 
 - [x] enumeration_db created automatically
 - [x] config_db created automatically
-- [x] skus collection created with schema validation
-- [x] global_config collection created with schema validation
+- [x] skus collection created
+- [x] global_config collection created
 - [x] All indexes created successfully
 - [x] Default configuration values loaded
 - [x] enumeration-api connects successfully

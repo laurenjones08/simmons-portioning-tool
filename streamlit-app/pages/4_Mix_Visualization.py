@@ -13,14 +13,14 @@ import pandas as pd
 # Allow importing api_client from the parent directory when running as a page
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from api_client import APIError, search_mixes
+from api_client import APIError, search_mixes, search_cut_strategies
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 BIRD_SIZE_OPTIONS = ["", "SB", "BB", "ALL"]
-MFG_TYPE_OPTIONS = ["", "DSI", "DB20"]
+LINE_TYPE_OPTIONS = ["", "DB20", "DSI884", "DSI888"]
 
 # Tri-state options for boolean filters
 TRISTATE_OPTIONS = ["(not filtered)", "True", "False"]
@@ -33,6 +33,10 @@ TRISTATE_OPTIONS = ["(not filtered)", "True", "False"]
 def _init_state() -> None:
     if "mixes" not in st.session_state:
         st.session_state.mixes = None  # None = not yet searched
+    if "mix_cut_strategies" not in st.session_state:
+        st.session_state.mix_cut_strategies = []
+    if "mix_cut_strategies_loaded" not in st.session_state:
+        st.session_state.mix_cut_strategies_loaded = False
 
 
 def _handle_api_error(e: APIError) -> None:
@@ -40,6 +44,45 @@ def _handle_api_error(e: APIError) -> None:
         st.error("Could not reach Enumeration API. Check your connection.")
     else:
         st.error(e.detail)
+
+
+def _load_cut_strategies() -> None:
+    try:
+        st.session_state.mix_cut_strategies = search_cut_strategies({})
+        st.session_state.mix_cut_strategies_loaded = True
+    except APIError as e:
+        _handle_api_error(e)
+        st.session_state.mix_cut_strategies = []
+
+
+def _format_cut_strategy_label(strategy: dict) -> str:
+    name = strategy.get("name", "")
+    line_type = strategy.get("lineType", strategy.get("mfgType", ""))
+    parts = ", ".join(strategy.get("parts", []))
+
+    label_parts = [part for part in [name, line_type] if part]
+    label = " - ".join(label_parts) if label_parts else "Cut Strategy"
+    if parts:
+        label = f"{label} [{parts}]"
+    return label
+
+
+def _strategy_options(line_type: str | None = None) -> tuple[list[str], dict[str, str]]:
+    strategies = st.session_state.mix_cut_strategies
+    if line_type:
+        strategies = [
+            strategy
+            for strategy in strategies
+            if strategy.get("lineType", strategy.get("mfgType")) == line_type
+        ]
+
+    option_ids = [strategy.get("_id", "") for strategy in strategies if strategy.get("_id")]
+    labels = {
+        strategy.get("_id", ""): _format_cut_strategy_label(strategy)
+        for strategy in strategies
+        if strategy.get("_id")
+    }
+    return option_ids, labels
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +93,8 @@ st.set_page_config(page_title="Mix Visualization", page_icon="🔀")
 st.title("Mix Visualization")
 
 _init_state()
+if not st.session_state.mix_cut_strategies_loaded:
+    _load_cut_strategies()
 
 # ---------------------------------------------------------------------------
 # Filter panel
@@ -57,14 +102,25 @@ _init_state()
 
 st.subheader("Filters")
 
+if not st.session_state.mix_cut_strategies:
+    st.warning("No cut strategies are currently available from the Enumeration API. The cutStrategyID filter will stay unfiltered.")
+
 with st.form("mix_search_form"):
     col1, col2 = st.columns(2)
+    cut_strategy_ids, cut_strategy_labels = _strategy_options()
 
     with col1:
         req_plant = st.text_input("reqPlant", placeholder="e.g. PLANT1")
         req_bird_size = st.selectbox("reqBirdSize", options=BIRD_SIZE_OPTIONS)
-        mfg_type = st.selectbox("mfgType", options=MFG_TYPE_OPTIONS)
-        cut_strategy_id = st.text_input("cutStrategyID", placeholder="e.g. 507f1f77bcf86cd799439011")
+        mfg_type = st.selectbox("lineType", options=LINE_TYPE_OPTIONS)
+        filtered_strategy_ids, filtered_strategy_labels = _strategy_options(mfg_type or None)
+        strategy_ids_to_show = filtered_strategy_ids or cut_strategy_ids
+        strategy_labels_to_show = filtered_strategy_labels or cut_strategy_labels
+        cut_strategy_id = st.selectbox(
+            "cutStrategyID",
+            options=[""] + strategy_ids_to_show,
+            format_func=lambda strategy_id: "(not filtered)" if not strategy_id else strategy_labels_to_show.get(strategy_id, strategy_id),
+        )
 
     with col2:
         sku_trade_number = st.text_input("skuTradeNumber", placeholder="e.g. 12345")
@@ -93,8 +149,8 @@ if search_clicked:
         criteria["reqBirdSize"] = req_bird_size
     if mfg_type:
         criteria["mfgType"] = mfg_type
-    if cut_strategy_id.strip():
-        criteria["cutStrategyID"] = cut_strategy_id.strip()
+    if cut_strategy_id:
+        criteria["cutStrategyID"] = cut_strategy_id
     if sku_trade_number.strip():
         criteria["skuTradeNumber"] = sku_trade_number.strip()
 
@@ -145,7 +201,7 @@ else:
         })
 
     df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
 
     # ---------------------------------------------------------------------------
     # Row detail — select a mix by ID
@@ -180,6 +236,6 @@ else:
                     skus_df = pd.DataFrame(
                         [{"tradeNumber": k, "partCode": v} for k, v in skus.items()]
                     )
-                    st.dataframe(skus_df, use_container_width=True, hide_index=True)
+                    st.dataframe(skus_df, width="stretch", hide_index=True)
                 else:
                     st.write("No SKUs")

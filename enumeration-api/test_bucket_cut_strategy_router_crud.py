@@ -27,7 +27,7 @@ def test_bucket_crud_flow():
     client, db = _make_test_client()
 
     # Create
-    create_resp = client.post("/buckets", json={"minWeight": 380, "maxWeight": 480})
+    create_resp = client.post("/buckets", json={"minWeight": 380, "targetWeight": 430, "maxWeight": 480})
     assert create_resp.status_code == 201
     created = create_resp.json()
     bucket_id = created["_id"]
@@ -45,7 +45,7 @@ def test_bucket_crud_flow():
     # Update
     update_resp = client.put(
         f"/buckets/{bucket_id}",
-        json={"minWeight": 390, "maxWeight": 490},
+        json={"minWeight": 390, "targetWeight": 440, "maxWeight": 490},
     )
     assert update_resp.status_code == 200
     assert update_resp.json()["minWeight"] == 390.0
@@ -70,6 +70,26 @@ def test_bucket_crud_flow():
     assert payload["deleted"] is True
     assert payload["metricsDeleted"] == 1
     assert "recomputing the enumeration model" in payload["warning"]
+
+
+def test_bucket_search_backfills_missing_legacy_target_weight():
+    client, db = _make_test_client()
+
+    db["buckets"].insert_one(
+        {
+            "_id": "legacy-bucket",
+            "minWeight": 380.0,
+            "maxWeight": 390.0,
+        }
+    )
+
+    response = client.post("/buckets/search", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["_id"] == "legacy-bucket"
+    assert payload[0]["targetWeight"] == 385.0
 
 
 def test_cut_strategy_crud_flow():
@@ -180,3 +200,98 @@ def test_cut_strategy_crud_flow():
     assert payload["deleted"] is True
     assert payload["mixesDeleted"] == 2
     assert payload["metricsDeleted"] == 2
+
+
+def test_cut_strategy_search_skips_invalid_legacy_documents():
+    client, db = _make_test_client()
+
+    db["cut_strategies"].insert_many(
+        [
+            {
+                "_id": "valid-1",
+                "name": "Valid Strategy",
+                "description": "ok",
+                "mfgType": "DSI",
+                "hasNugget": False,
+                "beltSpeed": 1.0,
+                "parts": ["D", "R"],
+                "partsKey": "d-r",
+            },
+            {
+                "_id": "invalid-1",
+                "name": "Legacy Bad Strategy",
+                "description": "bad",
+                "mfgType": "DSI888",
+                "hasNugget": False,
+                "beltSpeed": 1.0,
+                "parts": ["D", "R"],
+                "partsKey": "d-r",
+            },
+        ]
+    )
+
+    resp = client.post("/cut-strategies/search", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["_id"] == "valid-1"
+
+
+def test_sku_search_bird_size_includes_all():
+    client, db = _make_test_client()
+
+    db["skus"].insert_many(
+        [
+            {
+                "_id": "sku-sb",
+                "tradeNumber": "sku-sb",
+                "customerName": "Customer A",
+                "customerType": "FDS",
+                "productType": "NUGGET",
+                "unitsPerCut": 1,
+                "prodPlant": "FSP",
+                "minWeight": 10.0,
+                "maxWeight": 19.0,
+                "targetWeight": 15.0,
+                "birdSize": "SB",
+                "allowedParts": ["D"],
+            },
+            {
+                "_id": "sku-all",
+                "tradeNumber": "sku-all",
+                "customerName": "Customer B",
+                "customerType": "FDS",
+                "productType": "NUGGET",
+                "unitsPerCut": 1,
+                "prodPlant": "FSP",
+                "minWeight": 10.0,
+                "maxWeight": 19.0,
+                "targetWeight": 15.0,
+                "birdSize": "ALL",
+                "allowedParts": ["D"],
+            },
+            {
+                "_id": "sku-bb",
+                "tradeNumber": "sku-bb",
+                "customerName": "Customer C",
+                "customerType": "FDS",
+                "productType": "NUGGET",
+                "unitsPerCut": 1,
+                "prodPlant": "FSP",
+                "minWeight": 10.0,
+                "maxWeight": 19.0,
+                "targetWeight": 15.0,
+                "birdSize": "BB",
+                "allowedParts": ["D"],
+            },
+        ]
+    )
+
+    response = client.post("/skus/search", json={"birdSize": "SB"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    returned_trade_numbers = {row["tradeNumber"] for row in payload}
+
+    assert returned_trade_numbers == {"sku-sb", "sku-all"}

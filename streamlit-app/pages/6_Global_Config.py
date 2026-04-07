@@ -34,6 +34,17 @@ def get_input_widget_type(value_type: str) -> str:
     return mapping.get(value_type, "text")
 
 
+def get_default_value_for_type(value_type: str):
+    """Return a sensible default value for a config valueType."""
+    defaults = {
+        "int": 0,
+        "float": 0.0,
+        "string": "",
+        "bool": False,
+    }
+    return defaults.get(value_type, "")
+
+
 def validate_config_bounds(value, min_value, max_value) -> str | None:
     """Return None if value is within [min_value, max_value], else an error string.
 
@@ -43,6 +54,30 @@ def validate_config_bounds(value, min_value, max_value) -> str | None:
         return f"Value must be ≥ {min_value}."
     if max_value is not None and value > max_value:
         return f"Value must be ≤ {max_value}."
+    return None
+
+
+def validate_config_key(key: str, existing_keys: list[str] | None = None) -> str | None:
+    """Validate a config key for create operations."""
+    normalized_key = key.strip()
+    if not normalized_key:
+        return "Config key is required."
+    if normalized_key.startswith(".") or normalized_key.endswith("."):
+        return "Config key cannot start or end with a period."
+    if len(normalized_key) > 200:
+        return "Config key must be 200 characters or fewer."
+    if existing_keys and normalized_key in existing_keys:
+        return "Config key already exists. Use edit mode to change it."
+    return None
+
+
+def validate_config_description(description: str) -> str | None:
+    """Validate config description for create operations."""
+    normalized_description = description.strip()
+    if not normalized_description:
+        return "Description is required."
+    if len(normalized_description) > 500:
+        return "Description must be 500 characters or fewer."
     return None
 
 
@@ -57,6 +92,38 @@ def group_configs_by_prefix(configs: list[dict]) -> dict[str, list[dict]]:
         prefix = key.split(".")[0] if "." in key else key
         groups.setdefault(prefix, []).append(cfg)
     return groups
+
+
+def _build_config_update_payload(cfg: dict, value) -> dict:
+    """Build a ConfigUpdate-compatible payload from config metadata and new value."""
+    return {
+        "value": value,
+        "valueType": cfg.get("valueType", "string"),
+        "description": cfg.get("description", ""),
+        "minValue": cfg.get("minValue"),
+        "maxValue": cfg.get("maxValue"),
+    }
+
+
+def _build_new_config_payload(
+    value_type: str,
+    value,
+    description: str,
+    min_value=None,
+    max_value=None,
+) -> dict:
+    """Build a ConfigUpdate-compatible payload for a new config."""
+    payload = {
+        "value": value,
+        "valueType": value_type,
+        "description": description.strip(),
+        "minValue": None,
+        "maxValue": None,
+    }
+    if value_type in {"int", "float"}:
+        payload["minValue"] = min_value
+        payload["maxValue"] = max_value
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +186,7 @@ with col_mode:
     )
 
 configs: list[dict] = st.session_state.configs or []
+config_keys = [cfg.get("key", "") for cfg in configs]
 
 # ---------------------------------------------------------------------------
 # Empty state
@@ -150,9 +218,90 @@ for prefix, group_configs in groups.items():
                 "updatedAt": cfg.get("updatedAt", ""),
             })
         df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Add parameter
+# ---------------------------------------------------------------------------
+
+st.subheader("Add Parameter")
+
+with st.expander("Create a new configuration parameter", expanded=False):
+    with st.form("create_config_form"):
+        new_key = st.text_input("Key", placeholder="mix.availablePlants")
+        new_value_type = st.selectbox(
+            "Value type",
+            options=["string", "int", "float", "bool"],
+            index=0,
+        )
+        new_description = st.text_input(
+            "Description",
+            placeholder="Available production plants",
+        )
+
+        if new_value_type == "int":
+            new_value = st.number_input("Value", value=0, step=1)
+            enable_min = st.checkbox("Set minimum value", key="create_int_min_enabled")
+            new_min_value = st.number_input("Minimum value", value=0, step=1) if enable_min else None
+            enable_max = st.checkbox("Set maximum value", key="create_int_max_enabled")
+            new_max_value = st.number_input("Maximum value", value=100, step=1) if enable_max else None
+        elif new_value_type == "float":
+            new_value = st.number_input("Value", value=0.0, step=0.01, format="%.6f")
+            enable_min = st.checkbox("Set minimum value", key="create_float_min_enabled")
+            new_min_value = (
+                st.number_input("Minimum value", value=0.0, step=0.01, format="%.6f")
+                if enable_min else None
+            )
+            enable_max = st.checkbox("Set maximum value", key="create_float_max_enabled")
+            new_max_value = (
+                st.number_input("Maximum value", value=1.0, step=0.01, format="%.6f")
+                if enable_max else None
+            )
+        elif new_value_type == "bool":
+            new_value = st.checkbox("Value", value=False)
+            new_min_value = None
+            new_max_value = None
+        else:
+            new_value = st.text_input(
+                "Value",
+                value=get_default_value_for_type(new_value_type),
+            )
+            new_min_value = None
+            new_max_value = None
+
+        create_submitted = st.form_submit_button("Add Parameter")
+
+    if create_submitted:
+        key_error = validate_config_key(new_key, config_keys)
+        description_error = validate_config_description(new_description)
+        bounds_error = None
+
+        if new_value_type in {"int", "float"}:
+            if new_min_value is not None and new_max_value is not None and new_min_value > new_max_value:
+                bounds_error = "Minimum value cannot be greater than maximum value."
+            else:
+                bounds_error = validate_config_bounds(new_value, new_min_value, new_max_value)
+
+        validation_error = key_error or description_error or bounds_error
+
+        if validation_error:
+            st.warning(validation_error)
+        else:
+            try:
+                payload = _build_new_config_payload(
+                    value_type=new_value_type,
+                    value=new_value,
+                    description=new_description,
+                    min_value=new_min_value,
+                    max_value=new_max_value,
+                )
+                update_config(new_key.strip(), payload)
+                st.success(f"âœ… `{new_key.strip()}` created successfully.")
+                _load_configs()
+            except APIError as e:
+                _handle_api_error(e)
 
 # ---------------------------------------------------------------------------
 # Single-edit mode
@@ -161,7 +310,6 @@ st.divider()
 if edit_mode == "Single edit":
     st.subheader("Edit Parameter")
 
-    config_keys = [cfg.get("key", "") for cfg in configs]
     selected_key = st.selectbox("Select parameter to edit", options=[""] + config_keys)
 
     if selected_key:
@@ -225,14 +373,16 @@ if edit_mode == "Single edit":
                         st.warning(bounds_err)
                     else:
                         try:
-                            update_config(selected_key, {"value": new_value})
+                            payload = _build_config_update_payload(selected_cfg, new_value)
+                            update_config(selected_key, payload)
                             st.success(f"✅ `{selected_key}` updated successfully.")
                             _load_configs()
                         except APIError as e:
                             _handle_api_error(e)
                 else:
                     try:
-                        update_config(selected_key, {"value": new_value})
+                        payload = _build_config_update_payload(selected_cfg, new_value)
+                        update_config(selected_key, payload)
                         st.success(f"✅ `{selected_key}` updated successfully.")
                         _load_configs()
                     except APIError as e:
@@ -301,14 +451,17 @@ else:
             submit_clicked = st.form_submit_button("💾 Submit All Changes")
 
     def _collect_batch_payload() -> list[dict]:
-        """Collect all modified values from session state into a batch payload."""
+        """Collect all edited values into BatchUpdateRequest.configs format."""
         payload = []
         for cfg in configs:
             key = cfg.get("key", "")
             widget_key = f"batch_{key}"
             if widget_key in st.session_state:
                 new_val = st.session_state[widget_key]
-                payload.append({"key": key, "value": new_val})
+                payload.append({
+                    "key": key,
+                    "update": _build_config_update_payload(cfg, new_val),
+                })
         return payload
 
     def _display_batch_result(result: dict, validate_only: bool) -> None:

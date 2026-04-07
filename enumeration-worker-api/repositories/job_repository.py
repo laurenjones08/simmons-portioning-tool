@@ -22,9 +22,22 @@ class JobRepository:
         self._ensure_indexes()
 
     def _ensure_indexes(self) -> None:
-        self.collection.create_index([("status", 1)], name="idx_job_status")
-        self.collection.create_index([("runId", 1)], name="idx_run_id")
-        self.collection.create_index([("createdAt", -1)], name="idx_created_at")
+        existing_indexes = self.collection.index_information()
+
+        def index_exists(keys):
+            for idx in existing_indexes.values():
+                if idx.get("key") == keys:
+                    return True
+            return False
+
+        if not index_exists([("status", 1)]):
+            self.collection.create_index([("status", 1)], name="idx_job_status")
+
+        if not index_exists([("runId", 1)]):
+            self.collection.create_index([("runId", 1)], name="idx_run_id")
+
+        if not index_exists([("createdAt", -1)]):
+            self.collection.create_index([("createdAt", -1)], name="idx_created_at")
 
     # ------------------------------------------------------------------
     # Write helpers
@@ -44,6 +57,11 @@ class JobRepository:
         except PyMongoError as exc:
             raise RuntimeError(f"DB error updating job {job_id}: {exc}") from exc
 
+    @staticmethod
+    def _stage_array_index(stage_index: int) -> int:
+        """Translate 1-based stage numbers to 0-based Mongo array indexes."""
+        return max(stage_index - 1, 0)
+
     def mark_running(self, job_id: str, sku_count: int, stages: List[Dict]) -> None:
         now = _now()
         self.update_field(
@@ -58,13 +76,14 @@ class JobRepository:
 
     def mark_stage_running(self, job_id: str, stage_index: int, total: int) -> None:
         now = _now()
+        array_index = self._stage_array_index(stage_index)
         self.collection.update_one(
             {"_id": job_id},
             {
                 "$set": {
-                    f"stages.{stage_index}.status": "running",
-                    f"stages.{stage_index}.totalCombinations": total,
-                    f"stages.{stage_index}.startedAt": now,
+                    f"stages.{array_index}.status": "running",
+                    f"stages.{array_index}.totalCombinations": total,
+                    f"stages.{array_index}.startedAt": now,
                     "updatedAt": now,
                 }
             },
@@ -72,11 +91,12 @@ class JobRepository:
 
     def checkpoint_stage(self, job_id: str, stage_index: int, processed: int) -> None:
         now = _now()
+        array_index = self._stage_array_index(stage_index)
         self.collection.update_one(
             {"_id": job_id},
             {
                 "$set": {
-                    f"stages.{stage_index}.processedCombinations": processed,
+                    f"stages.{array_index}.processedCombinations": processed,
                     "updatedAt": now,
                 }
             },
@@ -84,13 +104,14 @@ class JobRepository:
 
     def mark_stage_complete(self, job_id: str, stage_index: int, processed: int) -> None:
         now = _now()
+        array_index = self._stage_array_index(stage_index)
         self.collection.update_one(
             {"_id": job_id},
             {
                 "$set": {
-                    f"stages.{stage_index}.status": "completed",
-                    f"stages.{stage_index}.processedCombinations": processed,
-                    f"stages.{stage_index}.finishedAt": now,
+                    f"stages.{array_index}.status": "completed",
+                    f"stages.{array_index}.processedCombinations": processed,
+                    f"stages.{array_index}.finishedAt": now,
                     "updatedAt": now,
                 }
             },

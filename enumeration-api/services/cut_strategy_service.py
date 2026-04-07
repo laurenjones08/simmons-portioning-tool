@@ -1,7 +1,9 @@
 """Business logic layer for CutStrategy operations."""
 
 from typing import Dict, List, Optional
+import logging
 
+from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
 from models.cut_strategy import (
@@ -13,6 +15,9 @@ from models.cut_strategy import (
 from repositories.cut_strategy_repository import CutStrategyRepository
 from repositories.mix_metric_repository import MixMetricRepository
 from repositories.mix_repository import MixRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class CutStrategyService:
@@ -33,13 +38,24 @@ class CutStrategyService:
         try:
             inserted = self.repository.create(document)
         except DuplicateKeyError:
-            raise ValueError("A cut strategy with this name already exists for the mfgType")
+            raise ValueError("A cut strategy with this name already exists for the lineType")
 
         return CutStrategy(**inserted)
 
+    @staticmethod
+    def _safe_parse_cut_strategy(doc: Optional[dict], context: str) -> Optional[CutStrategy]:
+        """Parse a raw document into CutStrategy, skipping invalid legacy records."""
+        if doc is None:
+            return None
+        try:
+            return CutStrategy(**doc)
+        except ValidationError as exc:
+            logger.warning("Skipping invalid cut strategy document during %s: %s", context, exc)
+            return None
+
     def get_cut_strategy_by_id(self, strategy_id: str) -> Optional[CutStrategy]:
         strategy_doc = self.repository.get_by_id(strategy_id)
-        return CutStrategy(**strategy_doc) if strategy_doc else None
+        return self._safe_parse_cut_strategy(strategy_doc, f"get_by_id({strategy_id})")
 
     def search_cut_strategies(self, criteria: CutStrategySearchCriteria) -> List[CutStrategy]:
         raw = criteria.model_dump(by_alias=True, exclude_none=True)
@@ -50,7 +66,13 @@ class CutStrategyService:
             mongo_criteria["parts"] = includes_part
 
         docs = self.repository.search(mongo_criteria)
-        return [CutStrategy(**doc) for doc in docs]
+
+        parsed: List[CutStrategy] = []
+        for doc in docs:
+            strategy = self._safe_parse_cut_strategy(doc, "search")
+            if strategy is not None:
+                parsed.append(strategy)
+        return parsed
 
     def update_cut_strategy(self, strategy_id: str, payload: CutStrategyUpdate) -> Optional[CutStrategy]:
         strategy = CutStrategy(_id=strategy_id, **payload.model_dump(by_alias=True))
@@ -59,7 +81,7 @@ class CutStrategyService:
         try:
             updated = self.repository.update(strategy_id, document)
         except DuplicateKeyError:
-            raise ValueError("A cut strategy with this name already exists for the mfgType")
+            raise ValueError("A cut strategy with this name already exists for the lineType")
 
         if not updated:
             return None

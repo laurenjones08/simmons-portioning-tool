@@ -112,7 +112,8 @@ def delete_sku(sku_id: str) -> dict:
 
 
 def batch_import_skus(skus: list[dict]) -> dict:
-    resp = _request("POST", f"{ENUMERATION_API_URL}/skus/batch", json=skus)
+    payload = {"skus": skus, "validateOnly": False}
+    resp = _request("POST", f"{ENUMERATION_API_URL}/skus/batch", json=payload)
     return resp.json()
 
 
@@ -190,6 +191,38 @@ def update_config(key: str, payload: dict) -> dict:
 
 
 def batch_update_configs(configs: list[dict], validate_only: bool = False) -> dict:
-    params = {"validateOnly": "true"} if validate_only else {}
-    resp = _request("POST", f"{CONFIG_API_URL}/config/batch", json=configs, params=params)
+    payload = {
+        "configs": configs,
+        "validateOnly": validate_only,
+    }
+    resp = _request("POST", f"{CONFIG_API_URL}/config/batch", json=payload)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Lines  (Config API)
+# ---------------------------------------------------------------------------
+
+def list_lines() -> list[dict]:
+    resp = _request("GET", f"{CONFIG_API_URL}/lines")
+    return resp.json()
+
+
+def get_active_lines() -> list[dict]:
+    resp = _request("GET", f"{CONFIG_API_URL}/lines/active")
+    return resp.json()
+
+
+def create_line(payload: dict) -> dict:
+    resp = _request("POST", f"{CONFIG_API_URL}/lines", json=payload)
+    return resp.json()
+
+
+def update_line(line_id: str, payload: dict) -> dict:
+    resp = _request("PUT", f"{CONFIG_API_URL}/lines/{line_id}", json=payload)
+    return resp.json()
+
+
+def delete_line(line_id: str) -> dict:
+    resp = _request("DELETE", f"{CONFIG_API_URL}/lines/{line_id}")
     return resp.json()

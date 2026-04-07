@@ -1,4 +1,5 @@
 import mongomock
+from bson import ObjectId
 
 from models.cut_strategy import (
     CutStrategyCreate,
@@ -125,3 +126,82 @@ def test_cut_strategy_service_crud_and_search():
     assert result["mixes_deleted"] == 2
     assert result["metrics_deleted"] == 2
     assert service.get_cut_strategy_by_id(created.strategy_id) is None
+
+
+def test_cut_strategy_search_handles_objectid_documents():
+    service, db = build_service()
+
+    raw_id = ObjectId()
+    db["cut_strategies"].insert_one(
+        {
+            "_id": raw_id,
+            "name": "Legacy Strategy",
+            "description": "legacy",
+            "mfgType": "DB20",
+            "hasNugget": False,
+            "beltSpeed": 1.0,
+            "parts": ["K", " V"],
+            "partsKey": CutStrategyRepository.generate_parts_key(["K", "V"]),
+        }
+    )
+
+    result = service.search_cut_strategies(CutStrategySearchCriteria(mfgType="DB20"))
+
+    assert len(result) == 1
+    assert result[0].strategy_id == str(raw_id)
+    assert result[0].parts == ["K", "V"]
+
+
+def test_cut_strategy_search_skips_invalid_mfgtype_documents():
+    service, db = build_service()
+
+    db["cut_strategies"].insert_many(
+        [
+            {
+                "_id": "valid-1",
+                "name": "Valid Strategy",
+                "description": "ok",
+                "mfgType": "DSI",
+                "hasNugget": False,
+                "beltSpeed": 1.0,
+                "parts": ["D", "R"],
+                "partsKey": CutStrategyRepository.generate_parts_key(["D", "R"]),
+            },
+            {
+                "_id": "invalid-1",
+                "name": "Bad Legacy Strategy",
+                "description": "bad",
+                "mfgType": "DSI888",
+                "hasNugget": False,
+                "beltSpeed": 1.0,
+                "parts": ["D", "R"],
+                "partsKey": CutStrategyRepository.generate_parts_key(["D", "R"]),
+            },
+        ]
+    )
+
+    result = service.search_cut_strategies(CutStrategySearchCriteria())
+
+    assert len(result) == 1
+    assert result[0].strategy_id == "valid-1"
+
+
+def test_cut_strategy_get_by_id_returns_none_for_invalid_legacy_document():
+    service, db = build_service()
+
+    db["cut_strategies"].insert_one(
+        {
+            "_id": "invalid-by-id",
+            "name": "Bad Legacy Strategy",
+            "description": "bad",
+            "mfgType": "DSI888",
+            "hasNugget": False,
+            "beltSpeed": 1.0,
+            "parts": ["D", "R"],
+            "partsKey": CutStrategyRepository.generate_parts_key(["D", "R"]),
+        }
+    )
+
+    result = service.get_cut_strategy_by_id("invalid-by-id")
+
+    assert result is None

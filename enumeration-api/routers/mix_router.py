@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.database import Database
 
 from database import get_database
+from repositories.cut_strategy_repository import CutStrategyRepository
 from models.mix import MIX, MixCreate, MixSearchCriteria, MixUpdate
 from repositories.mix_repository import MixRepository
 from services.mix_service import MixService
@@ -19,7 +20,7 @@ async def health_check():
 
 
 def get_mix_service(db: Database = Depends(get_database)) -> MixService:
-    return MixService(MixRepository(db))
+    return MixService(MixRepository(db), CutStrategyRepository(db))
 
 
 @router.post("", response_model=MIX, status_code=status.HTTP_201_CREATED)

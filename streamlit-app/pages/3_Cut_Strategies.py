@@ -26,7 +26,7 @@ from api_client import (
 # ---------------------------------------------------------------------------
 
 VALID_PART_CODES = ["D", "R", "M", "T", "V", "K", "S", "U", "C", "J", "W", "G"]
-MFG_TYPES = ["DSI", "DB20"]
+LINE_TYPE_OPTIONS = ["DB20", "DSI884", "DSI888"]
 
 # ---------------------------------------------------------------------------
 # Pure validation helper (extracted for property-based testing)
@@ -109,7 +109,7 @@ if strategies:
         [
             {
                 "name": s.get("name", ""),
-                "mfgType": s.get("mfgType", ""),
+                "lineType": s.get("lineType", s.get("mfgType", "")),
                 "hasNugget": s.get("hasNugget", False),
                 "beltSpeed": s.get("beltSpeed"),
                 "parts": ", ".join(s.get("parts", [])),
@@ -117,7 +117,7 @@ if strategies:
             for s in strategies
         ]
     )
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
 else:
     st.info("No cut strategies found.")
 
@@ -132,7 +132,7 @@ with st.form("create_strategy_form", clear_on_submit=True):
     with c1:
         new_name = st.text_input("Name *")
         new_description = st.text_input("Description")
-        new_mfg_type = st.selectbox("mfgType *", options=MFG_TYPES)
+        new_line_type = st.selectbox("lineType *", options=LINE_TYPE_OPTIONS)
     with c2:
         new_has_nugget = st.checkbox("hasNugget")
         new_belt_speed = st.number_input("beltSpeed *", value=0.0, step=0.1, min_value=0.0)
@@ -150,7 +150,7 @@ if create_submitted:
             payload = {
                 "name": new_name.strip(),
                 "description": new_description.strip(),
-                "mfgType": new_mfg_type,
+                "lineType": new_line_type,
                 "hasNugget": new_has_nugget,
                 "beltSpeed": new_belt_speed,
                 "parts": new_parts,
@@ -177,7 +177,7 @@ else:
         options=list(strategy_options.keys()),
         format_func=lambda sid: (
             f"{strategy_options[sid].get('name', sid)}  "
-            f"(mfgType={strategy_options[sid].get('mfgType', '')})"
+            f"(lineType={strategy_options[sid].get('lineType', strategy_options[sid].get('mfgType', ''))})"
         ),
     )
 
@@ -189,9 +189,9 @@ else:
         with ec1:
             edit_name = st.text_input("Name *", value=sel.get("name", ""))
             edit_description = st.text_input("Description", value=sel.get("description", ""))
-            current_mfg_type = sel.get("mfgType", MFG_TYPES[0])
-            mfg_index = MFG_TYPES.index(current_mfg_type) if current_mfg_type in MFG_TYPES else 0
-            edit_mfg_type = st.selectbox("mfgType *", options=MFG_TYPES, index=mfg_index)
+            current_line_type = sel.get("lineType", sel.get("mfgType", LINE_TYPE_OPTIONS[0]))
+            line_type_index = LINE_TYPE_OPTIONS.index(current_line_type) if current_line_type in LINE_TYPE_OPTIONS else 0
+            edit_line_type = st.selectbox("lineType *", options=LINE_TYPE_OPTIONS, index=line_type_index)
         with ec2:
             edit_has_nugget = st.checkbox("hasNugget", value=bool(sel.get("hasNugget", False)))
             edit_belt_speed = st.number_input(
@@ -217,7 +217,7 @@ else:
                 payload = {
                     "name": edit_name.strip(),
                     "description": edit_description.strip(),
-                    "mfgType": edit_mfg_type,
+                    "lineType": edit_line_type,
                     "hasNugget": edit_has_nugget,
                     "beltSpeed": edit_belt_speed,
                     "parts": edit_parts,

@@ -41,7 +41,7 @@ df_in = loaded.df
 
 with st.expander("Preview input data", expanded=False):
     st.write(f"File: **{loaded.filename}**")
-    st.dataframe(df_in.head(50), use_container_width=True)
+    st.dataframe(df_in.head(50), width="stretch")
 
 # Use enumeration engine
 engine = EnumerationEngine()
@@ -81,7 +81,7 @@ norm = normalize_results(res.results_df)
 ranked = rank_results(norm)
 
 st.subheader("Ranked Results")
-st.dataframe(ranked, use_container_width=True)
+st.dataframe(ranked, width="stretch")
 
 csv_bytes = ranked.to_csv(index=False).encode("utf-8")
 st.download_button(

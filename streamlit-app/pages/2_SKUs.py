@@ -44,6 +44,34 @@ def validate_sku_weights(min_w: float, target_w: float, max_w: float) -> str | N
     return None
 
 
+_SKU_FIELD_KEY_MAP = {
+    "tradenumber": "tradeNumber",
+    "customername": "customerName",
+    "customertype": "customerType",
+    "producttype": "productType",
+    "unitspercut": "unitsPerCut",
+    "prodplant": "prodPlant",
+    "minweight": "minWeight",
+    "maxweight": "maxWeight",
+    "targetweight": "targetWeight",
+    "birdsize": "birdSize",
+    "allowedparts": "allowedParts",
+}
+
+
+def _normalize_sku_record_keys(record: dict) -> dict:
+    normalized: dict = {}
+    for key, value in record.items():
+        if key is None:
+            continue
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        mapped_key = _SKU_FIELD_KEY_MAP.get(key_text.lower(), key_text)
+        normalized[mapped_key] = value
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Session-state helpers
 # ---------------------------------------------------------------------------
@@ -144,7 +172,7 @@ if st.session_state.sku_searched:
                 for s in skus
             ]
         )
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
     else:
         st.info("No SKUs found for the given filters.")
 
@@ -300,29 +328,55 @@ if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
     records: list[dict] = []
     parse_error: str | None = None
+    row_parse_errors: list[str] = []
 
     try:
         if file_name.endswith(".json"):
             content = uploaded_file.read().decode("utf-8")
             data = json.loads(content)
             if isinstance(data, list):
-                records = data
+                for idx, item in enumerate(data, start=1):
+                    if isinstance(item, dict):
+                        records.append(_normalize_sku_record_keys(item))
+                    else:
+                        row_parse_errors.append(
+                            f"JSON item {idx}: expected an object, got {type(item).__name__}"
+                        )
             elif isinstance(data, dict):
-                records = [data]
+                if isinstance(data.get("skus"), list):
+                    for idx, item in enumerate(data["skus"], start=1):
+                        if isinstance(item, dict):
+                            records.append(_normalize_sku_record_keys(item))
+                        else:
+                            row_parse_errors.append(
+                                f"JSON 'skus' item {idx}: expected an object, got {type(item).__name__}"
+                            )
+                else:
+                    records = [_normalize_sku_record_keys(data)]
             else:
                 parse_error = "JSON file must contain an array of SKU objects or a single SKU object."
         else:
             # CSV
             content = uploaded_file.read().decode("utf-8")
             reader = csv.DictReader(io.StringIO(content))
-            for row in reader:
+            for row_idx, row in enumerate(reader, start=2):
                 # Coerce numeric fields
-                record: dict = dict(row)
+                record: dict = _normalize_sku_record_keys(dict(row))
                 for float_field in ("minWeight", "maxWeight", "targetWeight"):
                     if float_field in record and record[float_field] != "":
-                        record[float_field] = float(record[float_field])
+                        try:
+                            record[float_field] = float(record[float_field])
+                        except ValueError:
+                            row_parse_errors.append(
+                                f"Row {row_idx}, field '{float_field}': expected a number, got '{record[float_field]}'"
+                            )
                 if "unitsPerCut" in record and record["unitsPerCut"] != "":
-                    record["unitsPerCut"] = int(record["unitsPerCut"])
+                    try:
+                        record["unitsPerCut"] = int(record["unitsPerCut"])
+                    except ValueError:
+                        row_parse_errors.append(
+                            f"Row {row_idx}, field 'unitsPerCut': expected an integer, got '{record['unitsPerCut']}'"
+                        )
                 if "allowedParts" in record and isinstance(record["allowedParts"], str):
                     record["allowedParts"] = [
                         p.strip() for p in record["allowedParts"].split(",") if p.strip()
@@ -333,6 +387,10 @@ if uploaded_file is not None:
 
     if parse_error:
         st.error(parse_error)
+    elif row_parse_errors:
+        st.error("Parsing failed for one or more rows:")
+        for row_error in row_parse_errors:
+            st.error(row_error)
     elif not records:
         st.warning("The uploaded file contains no records.")
     else:
@@ -353,9 +411,13 @@ if uploaded_file is not None:
                     st.error("Errors during import:")
                     for err_item in errors:
                         if isinstance(err_item, dict):
-                            st.error(
-                                f"  Row {err_item.get('index', '?')}: {err_item.get('detail', err_item)}"
-                            )
+                            row = err_item.get("index", "?")
+                            field = err_item.get("field")
+                            message = err_item.get("error") or err_item.get("detail") or str(err_item)
+                            if field:
+                                st.error(f"  Row {row}, {field}: {message}")
+                            else:
+                                st.error(f"  Row {row}: {message}")
                         else:
                             st.error(f"  {err_item}")
             except APIError as e:

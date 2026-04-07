@@ -25,6 +25,9 @@ def test_router_is_registered():
     assert "/config/{key}" in routes, "Get/Update config endpoint not registered"
     assert "/config" in routes, "Get all configs endpoint not registered"
     assert "/config/batch" in routes, "Batch update endpoint not registered"
+    assert "/lines" in routes, "List/create lines endpoint not registered"
+    assert "/lines/active" in routes, "Active lines endpoint not registered"
+    assert "/lines/{line_id}" in routes, "Line detail endpoint not registered"
     
     print("✓ All Config endpoints are registered")
 
@@ -54,6 +57,9 @@ def test_openapi_schema_generated():
     assert "/config/{key}" in paths, "Get/Update config endpoint not in OpenAPI schema"
     assert "/config" in paths, "Get all configs endpoint not in OpenAPI schema"
     assert "/config/batch" in paths, "Batch update endpoint not in OpenAPI schema"
+    assert "/lines" in paths, "Lines endpoint not in OpenAPI schema"
+    assert "/lines/active" in paths, "Active lines endpoint not in OpenAPI schema"
+    assert "/lines/{line_id}" in paths, "Line detail endpoint not in OpenAPI schema"
     
     print("✓ OpenAPI schema includes all Config endpoints")
 
@@ -71,6 +77,12 @@ def test_endpoint_methods():
     assert "put" in paths["/config/{key}"], "Update config endpoint should support PUT"
     assert "get" in paths["/config"], "Get all configs endpoint should support GET"
     assert "post" in paths["/config/batch"], "Batch update endpoint should support POST"
+    assert "get" in paths["/lines"], "Lines endpoint should support GET"
+    assert "post" in paths["/lines"], "Lines endpoint should support POST"
+    assert "get" in paths["/lines/active"], "Active lines endpoint should support GET"
+    assert "get" in paths["/lines/{line_id}"], "Line detail endpoint should support GET"
+    assert "put" in paths["/lines/{line_id}"], "Line detail endpoint should support PUT"
+    assert "delete" in paths["/lines/{line_id}"], "Line detail endpoint should support DELETE"
     
     print("✓ All endpoints have correct HTTP methods")
 

@@ -65,6 +65,11 @@ class Settings(BaseSettings):
         default="global-config-api",
         description="Service name for logging and distributed tracing"
     )
+
+    enumeration_api_url: str = Field(
+        default="http://api-gateway:80/api/enumeration",
+        description="Base URL for the Enumeration API used for cross-service validation"
+    )
     
     # Jaeger Tracing Configuration
     jaeger_agent_host: str = Field(

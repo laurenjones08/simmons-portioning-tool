@@ -218,6 +218,9 @@ services:
     ports:
       - "8501:8501"
 
+    volumes:
+      - ./streamlit-app:/app
+
     environment:
       ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
       WORKER_API_URL: http://api-gateway:80/api/enumeration-worker

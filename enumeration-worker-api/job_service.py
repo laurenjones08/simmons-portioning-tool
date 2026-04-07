@@ -127,6 +127,12 @@ class JobService:
     @staticmethod
     def _doc_to_response(doc: Dict[str, Any]) -> JobStatusResponse:
         now = _now()
+        stages = []
+        for index, stage_doc in enumerate(doc.get("stages", []), start=1):
+            if isinstance(stage_doc, dict):
+                normalized_stage = dict(stage_doc)
+                normalized_stage.setdefault("stage", index)
+                stages.append(normalized_stage)
         return JobStatusResponse(
             jobId=str(doc["_id"]),
             status=doc.get("status", "pending"),
@@ -139,7 +145,7 @@ class JobService:
             maxCombinationSize=doc.get("maxCombinationSize", 4),
             plantFilter=doc.get("plantFilter"),
             birdSizeFilter=doc.get("birdSizeFilter"),
-            stages=doc.get("stages", []),
+            stages=stages,
             errorMessage=doc.get("errorMessage"),
             resultsCollection=doc.get("resultsCollection", "enumeration_results"),
         )

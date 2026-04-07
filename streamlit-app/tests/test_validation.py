@@ -236,8 +236,12 @@ _global_config_spec = importlib.util.spec_from_file_location("global_config_page
 _global_config_module = importlib.util.module_from_spec(_global_config_spec)
 _global_config_spec.loader.exec_module(_global_config_module)
 get_input_widget_type = _global_config_module.get_input_widget_type
+get_default_value_for_type = _global_config_module.get_default_value_for_type
 validate_config_bounds = _global_config_module.validate_config_bounds
+validate_config_key = _global_config_module.validate_config_key
+validate_config_description = _global_config_module.validate_config_description
 group_configs_by_prefix = _global_config_module.group_configs_by_prefix
+build_new_config_payload = _global_config_module._build_new_config_payload
 
 
 # Feature: streamlit-settings-page, Property 11: Config input control type matches valueType
@@ -258,6 +262,20 @@ def test_get_input_widget_type_property(value_type: str) -> None:
     assert result == expected, (
         f"Expected {expected!r} for value_type={value_type!r}, got {result!r}"
     )
+
+
+@settings(max_examples=20)
+@given(st.sampled_from(["int", "float", "string", "bool"]))
+def test_get_default_value_for_type_property(value_type: str) -> None:
+    """Default values match the selected config valueType."""
+    result = get_default_value_for_type(value_type)
+    expected = {
+        "int": 0,
+        "float": 0.0,
+        "string": "",
+        "bool": False,
+    }[value_type]
+    assert result == expected
 
 
 # Feature: streamlit-settings-page, Property 12: Config bounds enforcement
@@ -291,6 +309,75 @@ def test_validate_config_bounds_property(value: float, min_value, max_value) -> 
         assert result is not None and isinstance(result, str) and len(result) > 0, (
             f"Expected error string for value={value} outside [{min_value}, {max_value}], got {result!r}"
         )
+
+
+@settings(max_examples=100)
+@given(st.text(min_size=0, max_size=220), st.lists(st.text(min_size=1, max_size=20), max_size=5))
+def test_validate_config_key_property(key: str, existing_keys: list[str]) -> None:
+    """Config keys are required, bounded, and must not duplicate existing keys."""
+    result = validate_config_key(key, existing_keys)
+    normalized = key.strip()
+    is_valid = (
+        bool(normalized)
+        and not normalized.startswith(".")
+        and not normalized.endswith(".")
+        and len(normalized) <= 200
+        and normalized not in existing_keys
+    )
+
+    if is_valid:
+        assert result is None
+    else:
+        assert result is not None and isinstance(result, str) and len(result) > 0
+
+
+@settings(max_examples=100)
+@given(st.text(min_size=0, max_size=520))
+def test_validate_config_description_property(description: str) -> None:
+    """Descriptions are required and capped at 500 characters."""
+    result = validate_config_description(description)
+    normalized = description.strip()
+
+    if normalized and len(normalized) <= 500:
+        assert result is None
+    else:
+        assert result is not None and isinstance(result, str) and len(result) > 0
+
+
+def test_build_new_config_payload_numeric_bounds():
+    """Numeric create payloads preserve min/max bounds."""
+    payload = build_new_config_payload(
+        value_type="int",
+        value=5,
+        description=" Test config ",
+        min_value=0,
+        max_value=10,
+    )
+    assert payload == {
+        "value": 5,
+        "valueType": "int",
+        "description": "Test config",
+        "minValue": 0,
+        "maxValue": 10,
+    }
+
+
+def test_build_new_config_payload_non_numeric_ignores_bounds():
+    """Non-numeric create payloads do not emit numeric bounds."""
+    payload = build_new_config_payload(
+        value_type="string",
+        value="FSP,VBS,SS2",
+        description="Plants",
+        min_value=0,
+        max_value=10,
+    )
+    assert payload == {
+        "value": "FSP,VBS,SS2",
+        "valueType": "string",
+        "description": "Plants",
+        "minValue": None,
+        "maxValue": None,
+    }
 
 
 # Feature: streamlit-settings-page, Property 10: Config parameters are grouped by key prefix
@@ -332,3 +419,5 @@ def test_group_configs_by_prefix_property(configs: list) -> None:
         assert cfg in groups[expected_prefix], (
             f"Config {cfg!r} not found in its expected group {expected_prefix!r}"
         )
+
+

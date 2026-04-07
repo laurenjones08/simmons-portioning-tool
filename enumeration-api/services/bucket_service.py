@@ -27,7 +27,9 @@ class BucketService:
 
     def get_bucket_by_id(self, bucket_id: str) -> Optional[Bucket]:
         doc = self.repository.get_by_id(bucket_id)
-        return Bucket(**doc) if doc else None
+        if not doc:
+            return None
+        return Bucket(**self._normalize_bucket_document(doc))
 
     def search_buckets(self, criteria: BucketSearchCriteria) -> List[Bucket]:
         raw = criteria.model_dump(by_alias=True, exclude_none=True)
@@ -42,7 +44,10 @@ class BucketService:
             mongo_criteria.setdefault("maxWeight", {})["$lte"] = max_weight_lte
 
         docs = self.repository.search(mongo_criteria)
-        return [Bucket(**doc) for doc in docs]
+        buckets: List[Bucket] = []
+        for doc in docs:
+            buckets.append(Bucket(**self._normalize_bucket_document(doc)))
+        return buckets
 
     def update_bucket(self, bucket_id: str, payload: BucketUpdate) -> Optional[Bucket]:
         bucket = Bucket(_id=bucket_id, **payload.model_dump(by_alias=True))
@@ -65,3 +70,19 @@ class BucketService:
             "deleted": deleted,
             "metrics_deleted": metrics_deleted,
         }
+
+    def _normalize_bucket_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """Backfill required fields for legacy bucket documents."""
+        normalized = dict(doc)
+
+        if normalized.get("targetWeight") is None:
+            min_weight = normalized.get("minWeight")
+            max_weight = normalized.get("maxWeight")
+            if min_weight is None or max_weight is None:
+                raise ValueError("Bucket document is missing required weight fields")
+
+            # Legacy bucket docs were stored without targetWeight. Use the midpoint so
+            # they can still be loaded and then re-saved in the newer schema.
+            normalized["targetWeight"] = (float(min_weight) + float(max_weight)) / 2.0
+
+        return normalized

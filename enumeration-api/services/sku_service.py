@@ -167,7 +167,17 @@ class SKUService:
             
             # Get dict with aliases (camelCase field names)
             criteria_dict = criteria.model_dump(by_alias=True, exclude_none=True)
-            
+
+            # Bird-size searches should include generic ALL SKUs.
+            requested_bird_size = criteria_dict.get("birdSize")
+            if isinstance(requested_bird_size, str):
+                normalized_bird_size = requested_bird_size.strip().upper()
+                if normalized_bird_size:
+                    if normalized_bird_size == "ALL":
+                        criteria_dict["birdSize"] = "ALL"
+                    else:
+                        criteria_dict["birdSize"] = {"$in": [normalized_bird_size, "ALL"]}
+
             # Call repository with the filter
             sku_docs = self.sku_repository.find_by_criteria(criteria_dict)
 
@@ -225,7 +235,7 @@ class SKUService:
             # Step 1: Validate all SKUs
             # Pydantic models are already validated when created, but we check
             # for any additional business rules here
-            
+
             # Check for duplicate trade numbers within the batch
             trade_numbers = [sku.trade_number for sku in skus]
             seen = set()
@@ -237,7 +247,7 @@ class SKUService:
                         "error": f"Duplicate trade number in batch: {tn}"
                     })
                 seen.add(tn)
-            
+
             # If validation errors found, return failure result
             if errors:
                 return BatchImportResult(
@@ -246,7 +256,7 @@ class SKUService:
                     failed=len(errors),
                     errors=errors
                 )
-            
+
             # If validate_only mode, return success without inserting
             if validate_only:
                 return BatchImportResult(

@@ -9,7 +9,6 @@ The `init-mongo.js` script automatically creates:
 ### 1. Enumeration Database (`enumeration_db`)
 - **Collection**: `skus`
 - **Purpose**: Stores Stock Keeping Unit (SKU) data for product enumeration
-- **Schema Validation**: Enforces required fields and data types
 - **Indexes**:
   - `idx_customer_type` - Fast filtering by customer type
   - `idx_product_type` - Fast filtering by product type
@@ -20,13 +19,16 @@ The `init-mongo.js` script automatically creates:
 ### 2. Config Database (`config_db`)
 - **Collection**: `global_config`
 - **Purpose**: Stores global configuration key-value pairs
-- **Schema Validation**: Enforces required fields and type constraints
 - **Indexes**:
   - `idx_value_type` - Fast filtering by value type
   - `idx_updated_at` - Sorting by last update timestamp
 - **Default Configuration Values**:
-  - `enumeration.defaultMaxTrim` - Default max trim (int: 2)
+  - `enumeration.defaultMaxTrim` - Default max trim (int: 15)
   - `enumeration.defaultMinTargetDelta` - Default min target delta (float: 0.5)
+  - `enumeration.bucketWeightTolerancePct` - Bucket fit tolerance percent (float: 0.0)
+  - `enumeration.fdsValueCoefficient` - FDS value coefficient used in mix scoring (float: 0.0)
+  - `enumeration.rtlValueCoefficient` - RTL value coefficient used in mix scoring (float: 0.0)
+  - `enumeration.trimValueCoefficient` - Trim value coefficient used in mix scoring (float: 0.0)
   - `system.enableDebugLogging` - Debug logging flag (bool: false)
   - `system.serviceName` - Application name (string: "Simmons Portioning Tool")
 
@@ -100,14 +102,6 @@ db.global_config.getIndexes()
 db.global_config.find().pretty()
 ```
 
-## Schema Validation
-
-Both collections use MongoDB schema validation with:
-- **Validation Level**: `moderate` - Validates inserts and updates to valid documents
-- **Validation Action**: `warn` - Logs warnings but allows operations to proceed
-
-This provides data quality checks while maintaining flexibility during development.
-
 ## Performance Considerations
 
 ### Indexes
@@ -132,14 +126,6 @@ MongoDB can use this compound index efficiently for any left-to-right subset of 
 3. Verify the script has no syntax errors
 4. Reset the data volume and restart
 
-### Validation Errors
-**Symptom**: Cannot insert documents due to validation failures.
-
-**Solution**:
-1. Check the schema validation rules in the script
-2. Ensure your data matches the required schema
-3. Validation is set to `warn` mode, so it shouldn't block operations
-4. Check MongoDB logs for validation warnings
 
 ### Permission Issues
 **Symptom**: Cannot read initialization script.

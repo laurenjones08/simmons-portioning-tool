@@ -14,7 +14,7 @@ def build_service():
 def test_bucket_service_crud_and_search():
     service, db = build_service()
 
-    created = service.create_bucket(BucketCreate(minWeight=380, maxWeight=480))
+    created = service.create_bucket(BucketCreate(minWeight=380, targetWeight=420, maxWeight=480))
     fetched = service.get_bucket_by_id(created.bucket_id)
     assert fetched is not None
     assert fetched.bucket_id == created.bucket_id
@@ -25,10 +25,11 @@ def test_bucket_service_crud_and_search():
 
     updated = service.update_bucket(
         created.bucket_id,
-        BucketUpdate(minWeight=390, maxWeight=490),
+        BucketUpdate(minWeight=390, targetWeight=430, maxWeight=490),
     )
     assert updated is not None
     assert updated.min_weight == 390
+    assert updated.target_weight == 430
 
     # Seed a dependent metric that should be cascade-deleted with the bucket.
     db["mix_metrics"].insert_one(

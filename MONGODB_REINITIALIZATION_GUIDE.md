@@ -95,11 +95,9 @@ Get-Content mongodb-init/init-mongo.js | docker exec -i mongodb mongosh -u root 
 **Collections:**
 1. **`skus`** - Stock Keeping Unit data
    - 6 indexes (customer type, product type, plant, compound, customer name)
-   - Schema validation for trade numbers, weights, parts
 
 2. **`mixes`** - Mix combinations for portioning
    - 8 indexes (unique compound, mfg type, flags, cut strategy)
-   - Schema validation for SKU maps, weights, manufacturing types
 
 ### `config_db` Database
 
@@ -109,11 +107,15 @@ Get-Content mongodb-init/init-mongo.js | docker exec -i mongodb mongosh -u root 
    - Default configuration values:
      - `enumeration.defaultMaxTrim`
      - `enumeration.defaultMinTargetDelta`
+      - `enumeration.bucketWeightTolerancePct` = `0.0`
+      - `enumeration.fdsValueCoefficient` = `0.0`
+      - `enumeration.rtlValueCoefficient` = `0.0`
+      - `enumeration.trimValueCoefficient` = `0.0`
      - `system.enableDebugLogging`
      - `system.serviceName`
      - `mix.availablePlants` = `"FSP,SS2,VBS"`
      - `mix.availableBirdSizes` = `"SB,BB"`
-     - `mix.availableMfgTypes` = `"DSI,DB20"`
+      - `mix.availableMfgTypes` = `"DSI888,DSI884,DB20"`
 
 ---
 
@@ -131,7 +133,7 @@ docker exec mongodb mongosh -u root -p example --eval "db.getSiblingDB('enumerat
 # Check config_db default values
 docker exec mongodb mongosh -u root -p example --eval "db.getSiblingDB('config_db').global_config.countDocuments({})"
 
-# Should return 7 config documents
+# Should return 11 config documents
 ```
 
 ---

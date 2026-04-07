@@ -28,195 +28,31 @@ print('  ✓ Database "enumeration_db" created/selected');
 
 // Create the 'skus' collection
 print('\n  Creating "skus" collection...');
-db.createCollection('skus', {
-    validator: {
-        $jsonSchema: {
-            bsonType: "object",
-            required: ["_id", "tradeNumber", "customerName", "customerType", "productType",
-                       "unitsPerCut", "prodPlant", "minWeight", "maxWeight", "targetWeight",
-                       "allowedParts"],
-            properties: {
-                _id: {
-                    bsonType: "string",
-                    description: "Trade number - must be a unique string (same as tradeNumber)"
-                },
-                tradeNumber: {
-                    bsonType: "string",
-                    description: "Trade number identifier"
-                },
-                customerName: {
-                    bsonType: "string",
-                    description: "Customer name"
-                },
-                customerType: {
-                    bsonType: "string",
-                    description: "Customer type code (e.g., FDS)"
-                },
-                productType: {
-                    bsonType: "string",
-                    description: "Product type (e.g., NUGGET, TENDER)"
-                },
-                unitsPerCut: {
-                    bsonType: "int",
-                    minimum: 1,
-                    description: "Number of units per cut operation"
-                },
-                prodPlant: {
-                    bsonType: "string",
-                    description: "Production plant code"
-                },
-                minWeight: {
-                    bsonType: "double",
-                    minimum: 0,
-                    description: "Minimum weight in grams"
-                },
-                maxWeight: {
-                    bsonType: "double",
-                    minimum: 0,
-                    description: "Maximum weight in grams"
-                },
-                targetWeight: {
-                    bsonType: "double",
-                    minimum: 0,
-                    description: "Target weight in grams"
-                },
-                allowedParts: {
-                    bsonType: "array",
-                    minItems: 1,
-                    items: {
-                        bsonType: "string"
-                    },
-                    description: "Array of allowed part identifiers"
-                }
-            }
-        }
-    },
-    validationLevel: "moderate",
-    validationAction: "warn"
-});
+db.createCollection('skus');
 
-print('  ✓ Collection "skus" created with schema validation');
+print('  ✓ Collection "skus" created');
 
 // Create indexes for the skus collection
 print('\n  Creating indexes for "skus" collection...');
-
-// Index on customerType for filtering by customer type
-db.skus.createIndex(
-    { "customerType": 1 },
-    {
-        name: "idx_customer_type",
-        background: true
-    }
-);
+db.skus.createIndex({ "customerType": 1 }, { name: "idx_customer_type", background: true });
 print('    ✓ Index created: idx_customer_type');
-
-// Index on productType for filtering by product type
-db.skus.createIndex(
-    { "productType": 1 },
-    {
-        name: "idx_product_type",
-        background: true
-    }
-);
+db.skus.createIndex({ "productType": 1 }, { name: "idx_product_type", background: true });
 print('    ✓ Index created: idx_product_type');
-
-// Index on prodPlant for filtering by production plant
-db.skus.createIndex(
-    { "prodPlant": 1 },
-    {
-        name: "idx_prod_plant",
-        background: true
-    }
-);
+db.skus.createIndex({ "prodPlant": 1 }, { name: "idx_prod_plant", background: true });
 print('    ✓ Index created: idx_prod_plant');
-
-// Compound index for common multi-criteria searches
 db.skus.createIndex(
     { "customerType": 1, "productType": 1, "prodPlant": 1 },
-    {
-        name: "idx_customer_product_plant",
-        background: true
-    }
+    { name: "idx_customer_product_plant", background: true }
 );
 print('    ✓ Index created: idx_customer_product_plant (compound)');
-
-// Index on customerName for text searches
-db.skus.createIndex(
-    { "customerName": 1 },
-    {
-        name: "idx_customer_name",
-        background: true
-    }
-);
+db.skus.createIndex({ "customerName": 1 }, { name: "idx_customer_name", background: true });
 print('    ✓ Index created: idx_customer_name');
 
 // Create the 'mixes' collection
 print('\n  Creating "mixes" collection...');
-db.createCollection('mixes', {
-    validator: {
-        $jsonSchema: {
-            bsonType: "object",
-            required: ["_id", "skus", "includesFDS", "includesRTL", "includesNug",
-                       "numFillets", "filletWeight", "mfgType", "cutStrategyID", "beltSpeed", "skuSetKey"],
-            properties: {
-                _id: {
-                    bsonType: "string",
-                    description: "Unique mix ObjectId"
-                },
-                skus: {
-                    bsonType: "object",
-                    description: "Map of SKU trade number to Part ID"
-                },
-                includesFDS: {
-                    bsonType: "bool",
-                    description: "Whether this mix includes a food service customer"
-                },
-                includesRTL: {
-                    bsonType: "bool",
-                    description: "Whether this mix includes a retail customer"
-                },
-                includesNug: {
-                    bsonType: "bool",
-                    description: "Whether this mix includes a nugget SKU"
-                },
-                nuggetTargetWeight: {
-                    description: "Target weight of one nugget (nullable, required > 0 when includesNug=true)"
-                },
-                numFillets: {
-                    bsonType: "int",
-                    minimum: 0,
-                    description: "Count of fillet SKUs in this mix"
-                },
-                filletWeight: {
-                    bsonType: "double",
-                    minimum: 0,
-                    description: "Total weight of fillet SKUs in this mix"
-                },
-                mfgType: {
-                    enum: ["DSI", "DB20"],
-                    description: "Manufacturing line type"
-                },
-                cutStrategyID: {
-                    bsonType: "string",
-                    description: "Predetermined cut strategy ID"
-                },
-                beltSpeed: {
-                    bsonType: "double",
-                    minimum: 0,
-                    description: "Required belt speed for this mix"
-                },
-                skuSetKey: {
-                    bsonType: "string",
-                    description: "Deterministic key built from sorted SKU trade numbers for uniqueness enforcement"
-                }
-            }
-        }
-    },
-    validationLevel: "moderate",
-    validationAction: "warn"
-});
+db.createCollection('mixes');
 
-print('  ✓ Collection "mixes" created with schema validation');
+print('  ✓ Collection "mixes" created');
 
 // Create indexes for the mixes collection
 print('\n  Creating indexes for "mixes" collection...');
@@ -397,49 +233,9 @@ print('  ✓ Database "config_db" created/selected');
 
 // Create the 'global_config' collection
 print('\n  Creating "global_config" collection...');
-db.createCollection('global_config', {
-    validator: {
-        $jsonSchema: {
-            bsonType: "object",
-            required: ["_id", "key", "value", "valueType", "description", "updatedAt"],
-            properties: {
-                _id: {
-                    bsonType: "string",
-                    description: "Configuration key - must be a unique string (same as key)"
-                },
-                key: {
-                    bsonType: "string",
-                    description: "Configuration key identifier"
-                },
-                value: {
-                    description: "Configuration value (can be int, string, double, or bool)"
-                },
-                valueType: {
-                    enum: ["int", "string", "float", "bool"],
-                    description: "Type of the configuration value"
-                },
-                description: {
-                    bsonType: "string",
-                    description: "Description of the configuration parameter"
-                },
-                updatedAt: {
-                    bsonType: "date",
-                    description: "Last update timestamp"
-                },
-                minValue: {
-                    description: "Minimum allowed value (for numeric types, optional)"
-                },
-                maxValue: {
-                    description: "Maximum allowed value (for numeric types, optional)"
-                }
-            }
-        }
-    },
-    validationLevel: "moderate",
-    validationAction: "warn"
-});
+db.createCollection('global_config');
 
-print('  ✓ Collection "global_config" created with schema validation');
+print('  ✓ Collection "global_config" created');
 
 // Create indexes for the global_config collection
 print('\n  Creating indexes for "global_config" collection...');
@@ -464,13 +260,21 @@ db.global_config.createIndex(
 );
 print('    ✓ Index created: idx_updated_at');
 
+print('\n  Creating "lines" collection...');
+db.createCollection('lines');
+
+print('  ✓ Collection "lines" created');
+db.lines.createIndex({ "lineId": 1 }, { name: "uniq_line_id", unique: true, background: true });
+db.lines.createIndex({ "isActive": 1 }, { name: "idx_lines_active", background: true });
+print('    ✓ Indexes created for "lines" collection');
+
 // Insert default configuration values
 print('\n  Inserting default configuration values...');
 db.global_config.insertMany([
     {
         "_id": "enumeration.defaultMaxTrim",
         "key": "enumeration.defaultMaxTrim",
-        "value": 2,
+        "value": 15,
         "valueType": "int",
         "description": "Default maximum trim allowed for SKU selection",
         "updatedAt": new Date(),
@@ -486,6 +290,43 @@ db.global_config.insertMany([
         "updatedAt": new Date(),
         "minValue": 0.0,
         "maxValue": 10.0
+    },
+    {
+        "_id": "enumeration.bucketWeightTolerancePct",
+        "key": "enumeration.bucketWeightTolerancePct",
+        "value": 0.0,
+        "valueType": "float",
+        "description": "Tolerance percent applied when fitting mixes to bucket target weight",
+        "updatedAt": new Date(),
+        "minValue": 0.0,
+        "maxValue": 100.0
+    },
+    {
+        "_id": "enumeration.fdsValueCoefficient",
+        "key": "enumeration.fdsValueCoefficient",
+        "value": 0.0,
+        "valueType": "float",
+        "description": "Value coefficient applied to total FDS weight during mix scoring",
+        "updatedAt": new Date(),
+        "minValue": 0.0
+    },
+    {
+        "_id": "enumeration.rtlValueCoefficient",
+        "key": "enumeration.rtlValueCoefficient",
+        "value": 0.0,
+        "valueType": "float",
+        "description": "Value coefficient applied to total RTL weight during mix scoring",
+        "updatedAt": new Date(),
+        "minValue": 0.0
+    },
+    {
+        "_id": "enumeration.trimValueCoefficient",
+        "key": "enumeration.trimValueCoefficient",
+        "value": 0.0,
+        "valueType": "float",
+        "description": "Value coefficient applied to trim weight during mix scoring",
+        "updatedAt": new Date(),
+        "minValue": 0.0
     },
     {
         "_id": "system.enableDebugLogging",
@@ -522,7 +363,7 @@ db.global_config.insertMany([
     {
         "_id": "mix.availableMfgTypes",
         "key": "mix.availableMfgTypes",
-        "value": "DSI,DB20",
+        "value": "DSI888,DSI884,DB20",
         "valueType": "string",
         "description": "Comma-separated list of available manufacturing line types for mix selection",
         "updatedAt": new Date()

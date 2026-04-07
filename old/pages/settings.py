@@ -169,7 +169,7 @@ def render_buckets_section():
     st.divider()
 
     # Add new bucket button
-    if st.button("➕ Add Bucket", use_container_width=True):
+    if st.button("➕ Add Bucket", width="stretch"):
         # Add a new bucket with default values
         config.buckets.append((0, 100))
         st.session_state.config_changed = True
@@ -254,7 +254,7 @@ def render_illegal_pairs_section():
     st.divider()
 
     # Add new illegal pair button
-    if st.button("➕ Add Illegal Pair", use_container_width=True):
+    if st.button("➕ Add Illegal Pair", width="stretch"):
         # Add a new illegal pair with default values
         # Find a unique default part code
         new_code = "NEW"
@@ -400,11 +400,11 @@ def render_settings_page():
     col1, col2, col3 = st.columns([1, 1, 4])
 
     with col1:
-        if st.button("💾 Save Changes", type="primary", use_container_width=True):
+        if st.button("💾 Save Changes", type="primary", width="stretch"):
             handle_save()
 
     with col2:
-        if st.button("🔄 Reset All", use_container_width=True):
+        if st.button("🔄 Reset All", width="stretch"):
             # Show confirmation dialog
             if st.session_state.get("confirm_reset", False):
                 handle_reset_all()

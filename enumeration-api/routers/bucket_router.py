@@ -32,7 +32,7 @@ def get_bucket_service(db: Database = Depends(get_database)) -> BucketService:
     response_model=Bucket,
     status_code=status.HTTP_201_CREATED,
     summary="Create bucket",
-    description="Create a new bucket definition used for enumeration bucketing.",
+    description="Create a new bucket definition with minWeight, targetWeight, and maxWeight.",
 )
 async def create_bucket(payload: BucketCreate, service: BucketService = Depends(get_bucket_service)):
     try:

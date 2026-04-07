@@ -11,8 +11,11 @@ The Global Config API is called over HTTP (via requests) to fetch runtime config
 
 import itertools
 import logging
+from functools import lru_cache
 from math import floor
 import os
+import random
+from statistics import NormalDist
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +37,99 @@ from enumeration_shared.repositories import (
 
 logger = logging.getLogger(__name__)
 
+
+def _is_nugget_product(product_type: Optional[str]) -> bool:
+    """Return True for any supported nugget product-type alias."""
+    return product_type in {"NUGGET", NUGGET_SKU_KEY}
+
+
+def _bucket_min_weight(bucket: Dict[str, Any]) -> float:
+    """Return the bucket's minimum weight, accepting legacy field aliases."""
+    if "minWeight" in bucket:
+        return bucket["minWeight"]
+    if "targetWeight" in bucket:
+        return bucket["targetWeight"]
+    raise KeyError("bucket must include 'minWeight' or 'targetWeight'")
+
+
+def _bucket_target_weight(bucket: Dict[str, Any]) -> float:
+    """Return the bucket's target weight, accepting legacy field aliases."""
+    if "targetWeight" in bucket:
+        return bucket["targetWeight"]
+    if "minWeight" in bucket:
+        return bucket["minWeight"]
+    raise KeyError("bucket must include 'targetWeight' or 'minWeight'")
+
+
+def _combo_sku_keys(combo: List[Dict[str, Any]]) -> List[str]:
+    """Return combo trade numbers in first-appearance order without duplicates."""
+    return list(dict.fromkeys(str(s["tradeNumber"]) for s in combo))
+
+
+def _assign_combo_part_codes(
+    combo: List[Dict[str, Any]],
+    strategy_parts: List[str],
+) -> Optional[List[str]]:
+    """
+    Assign one part code to each combo occurrence.
+
+    Non-nugget / non-strip SKUs must receive distinct part codes. Nugget and
+    strip SKUs can reuse part codes, but every assigned part must still be
+    allowed by the SKU and the final assignment must cover every strategy part.
+    """
+    assignments: List[Optional[str]] = [None] * len(combo)
+    used_parts: set[str] = set()
+
+    candidate_parts_by_index: List[List[str]] = []
+    for sku in combo:
+        allowed = sku.get("allowedParts", [])
+        candidate_parts_by_index.append([part for part in strategy_parts if part in allowed])
+
+    def backtrack(index: int) -> bool:
+        if index >= len(combo):
+            assigned_parts = {part for part in assignments if part is not None}
+            return all(part in assigned_parts for part in strategy_parts)
+
+        sku = combo[index]
+        candidate_parts = candidate_parts_by_index[index]
+        if not candidate_parts:
+            return False
+
+        is_nugget = _is_nugget_product(sku.get("productType"))
+        for part in candidate_parts:
+            if not is_nugget and part in used_parts:
+                continue
+
+            assignments[index] = part
+            added_part = False
+            if not is_nugget:
+                used_parts.add(part)
+                added_part = True
+
+            if backtrack(index + 1):
+                return True
+
+            assignments[index] = None
+            if added_part:
+                used_parts.remove(part)
+
+        return False
+
+    if not backtrack(0):
+        return None
+
+    return [str(part) for part in assignments if part is not None]
+
+
+def _build_combo_sku_map(combo: List[Dict[str, Any]], part_assignments: List[str]) -> Dict[str, str]:
+    """Build a trade-number -> part-code map from per-occurrence assignments."""
+    skus: Dict[str, str] = {}
+    for sku, part_code in zip(combo, part_assignments):
+        trade_number = str(sku["tradeNumber"])
+        if trade_number not in skus:
+            skus[trade_number] = part_code
+    return skus
+
 # ---------------------------------------------------------------------------
 # Global Config API key constants
 # ---------------------------------------------------------------------------
@@ -41,6 +137,13 @@ BUCKET_TOLERANCE_CONFIG_KEY = "enumeration.bucketWeightTolerancePct"
 FDS_VALUE_CONFIG_KEY        = "enumeration.fdsValueCoefficient"
 RTL_VALUE_CONFIG_KEY        = "enumeration.rtlValueCoefficient"
 TRIM_VALUE_CONFIG_KEY       = "enumeration.trimValueCoefficient"
+UPGRADE_MU_CONFIG_KEY       = "enumeration.upgradeDistributionMu"
+UPGRADE_SIGMA_CONFIG_KEY    = "enumeration.upgradeDistributionSigma"
+
+UPGRADE_MONTE_CARLO_SAMPLES = 10
+UPGRADE_CONFIDENCE_ALPHA    = 0.05
+
+NUGGET_SKU_KEY = "NUGGET|STRIP"
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +222,59 @@ def _load_buckets(db: Database) -> List[Dict[str, Any]]:
     return BucketRepository(db).search({})
 
 
+@lru_cache(maxsize=1024)
+def _mc_truncated_avg_pdf(
+    mu: float,
+    sigma: float,
+    lower_bound: float,
+    upper_bound: float,
+    n: int = UPGRADE_MONTE_CARLO_SAMPLES,
+    alpha: float = UPGRADE_CONFIDENCE_ALPHA,
+) -> tuple[float, float, float]:
+    """
+    Estimate the truncated-normal mean within a bucket and the implied trim.
+
+    The implementation mirrors the requested Monte Carlo approach while using a
+    deterministic RNG seed so repeated enumeration runs are stable for the same
+    bucket/config inputs.
+
+    Returns:
+        Tuple of ``(mean_estimate, ci_half_width, expected_trim_fraction)``.
+    """
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+    if upper_bound <= lower_bound:
+        raise ValueError("upper_bound must be greater than lower_bound")
+    if n <= 1:
+        raise ValueError("n must be greater than 1")
+
+    dist = NormalDist(mu=mu, sigma=sigma)
+    epsilon = 1e-12
+    cdf_lower = max(epsilon, min(1.0 - epsilon, dist.cdf(lower_bound)))
+    cdf_upper = max(epsilon, min(1.0 - epsilon, dist.cdf(upper_bound)))
+    if cdf_upper <= cdf_lower:
+        raise ValueError("bucket range has zero probability mass for the configured distribution")
+
+    seed = hash((round(mu, 8), round(sigma, 8), round(lower_bound, 8), round(upper_bound, 8), n))
+    rng = random.Random(seed)
+    samples = [
+        dist.inv_cdf(rng.uniform(cdf_lower, cdf_upper))
+        for _ in range(n)
+    ]
+
+    mean_est = sum(samples) / n
+    variance = sum((sample - mean_est) ** 2 for sample in samples) / (n - 1)
+    sample_std = variance ** 0.5
+    z = NormalDist().inv_cdf(1 - alpha / 2)
+    ci_half = z * sample_std / (n ** 0.5)
+    expected_trim = max(0.0, (mean_est - lower_bound) / mean_est) if mean_est > 0 else 0.0
+
+    return mean_est, ci_half, expected_trim
+
+
 def _fetch_config_values(global_config_url: str) -> Dict[str, float]:
     """
-    Fetch all four runtime config values from the Global Config API.
+    Fetch all runtime config values from the Global Config API.
 
     Makes one HTTP GET request per config key to ``{global_config_url}/config/{key}``.
     Each individual fetch falls back to ``0.0`` on any error (connection error,
@@ -140,6 +293,10 @@ def _fetch_config_values(global_config_url: str) -> Dict[str, float]:
     +-------------------+------------------------------------------+
     | ``trim_value``    | enumeration.trimValueCoefficient         |
     +-------------------+------------------------------------------+
+    | ``upgrade_mu``    | enumeration.upgradeDistributionMu        |
+    +-------------------+------------------------------------------+
+    | ``upgrade_sigma`` | enumeration.upgradeDistributionSigma     |
+    +-------------------+------------------------------------------+
 
     Args:
         global_config_url: Base URL of the Global Config API
@@ -147,13 +304,16 @@ def _fetch_config_values(global_config_url: str) -> Dict[str, float]:
 
     Returns:
         Dict with keys ``tolerance_pct``, ``fds_value``, ``rtl_value``,
-        ``trim_value``, each a ``float`` (defaulting to ``0.0`` on error).
+        ``trim_value``, ``upgrade_mu``, and ``upgrade_sigma``; each is a
+        ``float`` defaulting to ``0.0`` on error.
     """
     key_map = [
         ("tolerance_pct", BUCKET_TOLERANCE_CONFIG_KEY),
         ("fds_value",     FDS_VALUE_CONFIG_KEY),
         ("rtl_value",     RTL_VALUE_CONFIG_KEY),
         ("trim_value",    TRIM_VALUE_CONFIG_KEY),
+        ("upgrade_mu",    UPGRADE_MU_CONFIG_KEY),
+        ("upgrade_sigma", UPGRADE_SIGMA_CONFIG_KEY),
     ]
 
     result: Dict[str, float] = {}
@@ -250,7 +410,7 @@ def _get_valid_cut_strategies(
         combo_allowed_parts.update(sku.get("allowedParts", []))
 
     # Determine whether the combo contains a nugget SKU
-    combo_has_nugget = any(s.get("productType") == "NUGGET" for s in combo)
+    combo_has_nugget = any(_is_nugget_product(s.get("productType")) for s in combo)
 
     valid = []
     for strategy in cut_strategies:
@@ -261,7 +421,9 @@ def _get_valid_cut_strategies(
         # Every part code in the strategy must be covered by at least one SKU
         strategy_parts = strategy.get("parts", [])
         if all(part in combo_allowed_parts for part in strategy_parts):
-            valid.append(strategy)
+            # Every SKU in the combo also needs a concrete assignment from the strategy.
+            if _assign_combo_part_codes(combo, strategy_parts) is not None:
+                valid.append(strategy)
 
     return valid
 
@@ -295,26 +457,26 @@ def _build_mix(
         Dict representing the Mix document with all derived fields.
     """
     # Build skus map: tradeNumber -> first matching part code
-    skus: Dict[str, str] = {}
-    for sku in combo:
-        trade_number = sku["tradeNumber"]
-        allowed = sku.get("allowedParts", [])
-        for part_code in strategy.get("parts", []):
-            if part_code in allowed:
-                skus[trade_number] = part_code
-                break
+    part_assignments = _assign_combo_part_codes(combo, strategy.get("parts", []))
+    if part_assignments is None:
+        raise ValueError(
+            "Cannot build mix because at least one SKU in the combo "
+            "does not match any part in the cut strategy"
+        )
+
+    skus = _build_combo_sku_map(combo, part_assignments)
 
     # Derived boolean flags
     includes_fds = any(s.get("customerType") == "FDS" for s in combo)
     includes_rtl = any(s.get("customerType") == "RTL" for s in combo)
-    combo_has_nugget = any(s.get("productType") == "NUGGET" for s in combo)
+    combo_has_nugget = any(_is_nugget_product(s.get("productType")) for s in combo)
     includes_nug = combo_has_nugget and bool(strategy.get("hasNugget", False))
 
     # Nugget target weight
     nugget_target_weight: Optional[float] = None
     if includes_nug:
         for sku in combo:
-            if sku.get("productType") == "NUGGET":
+            if _is_nugget_product(sku.get("productType")):
                 nugget_target_weight = sku["targetWeight"]
                 break
 
@@ -323,12 +485,13 @@ def _build_mix(
     req_bird_size = bird_size_filter if bird_size_filter is not None else combo[0]["birdSize"]
 
     # Fillet counts and weight (non-nugget SKUs)
-    non_nugget_skus = [s for s in combo if s.get("productType") != "NUGGET"]
+    non_nugget_skus = [s for s in combo if s.get("productType") != NUGGET_SKU_KEY]
     num_fillets = len(non_nugget_skus)
     fillet_weight = sum(s["targetWeight"] for s in non_nugget_skus)
 
     return {
         "skus": skus,
+        "_partAssignments": part_assignments,
         "cutStrategyID": strategy["_id"],
         "mfgType": strategy["mfgType"],
         "beltSpeed": strategy["beltSpeed"],
@@ -340,7 +503,7 @@ def _build_mix(
         "reqBirdSize": req_bird_size,
         "numFillets": num_fillets,
         "filletWeight": fillet_weight,
-        "skuKeys": [s["tradeNumber"] for s in combo],
+        "skuKeys": _combo_sku_keys(combo),
     }
 
 
@@ -365,8 +528,42 @@ def _fits_bucket(mix_weight: float, bucket: Dict, tolerance_pct: float) -> bool:
         ``True`` when ``effective_min <= mix_weight <= bucket["maxWeight"]``,
         ``False`` otherwise.
     """
-    effective_min = bucket["minWeight"] * (1 - tolerance_pct / 100)
+    effective_min = _bucket_min_weight(bucket) * (1 - tolerance_pct / 100)
     return effective_min <= mix_weight <= bucket["maxWeight"]
+
+
+def _planned_bucket_weight(
+    combo: List[Dict],
+    bucket: Dict,
+    includes_nug: bool,
+    nugget_target_weight: Optional[float],
+) -> float:
+    """
+    Return the total weight implied by the persisted unit plan for a bucket.
+
+    Bucket-fit validation must use the same planned total that will be stored in
+    ``unitPlan``. Otherwise a combo can appear to fit by raw target-weight sum
+    while the persisted plan materially exceeds the bucket bounds.
+    """
+    min_weight = _bucket_min_weight(bucket)
+    planned_weight = 0.0
+
+    for sku in combo:
+        target_weight = sku["targetWeight"]
+        units_per_cut = sku.get("unitsPerCut", 1)
+
+        if (
+            includes_nug
+            and _is_nugget_product(sku.get("productType"))
+            and nugget_target_weight is not None
+            and nugget_target_weight > 0
+        ):
+            units_in_plan = floor(min_weight / nugget_target_weight)
+            planned_weight += units_in_plan * nugget_target_weight
+        else:
+            planned_weight += units_per_cut * target_weight
+
+    return planned_weight
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +578,7 @@ def _compute_mix_metric(
     includes_nug: bool,
     nugget_target_weight: Optional[float],
     config_values: Dict[str, float],
+    part_assignments: Optional[List[str]] = None,
 ) -> Dict:
     """
     Compute a MixMetric document for a given Mix + Bucket pairing.
@@ -389,9 +587,12 @@ def _compute_mix_metric(
 
     **Metric formulas**:
 
-    - ``upgradePercentage``: percentage of SKUs whose ``targetWeight`` exceeds
-      ``bucket["minWeight"]``, i.e.
-      ``count(sku.targetWeight > bucket.minWeight) / len(combo) * 100``.
+    - ``upgradePercentage``: when ``upgrade_mu`` and ``upgrade_sigma`` are
+      configured, this is derived from the expected unavoidable trim of a
+      truncated normal over the bucket's actual range
+      ``[bucket.minWeight, bucket.maxWeight]`` and computed as
+      ``(1 - expected_trim) * 100``. Otherwise it falls back to the legacy
+      ``(mix_weight / bucket.targetWeight) * 100`` formula, capped at 100.
     - ``trimPercentage``: ``((mix_weight - bucket.minWeight) / mix_weight) * 100``
       when ``mix_weight > bucket.minWeight``, otherwise ``0.0``.
     - ``value``: ``fds_weight * fds_value + rtl_weight * rtl_value + trim_weight * trim_value``
@@ -418,27 +619,47 @@ def _compute_mix_metric(
         includes_nug: Whether the mix includes a nugget SKU.
         nugget_target_weight: ``targetWeight`` of the nugget SKU, or ``None``.
         config_values: Dict with keys ``fds_value``, ``rtl_value``,
-            ``trim_value`` (and ``tolerance_pct``, unused here).
+            ``trim_value``, ``upgrade_mu``, ``upgrade_sigma`` (and
+            ``tolerance_pct``, unused here).
 
     Returns:
         Dict representing the MixMetric document.
     """
     mix_weight = sum(s["targetWeight"] for s in combo)
-    min_weight = bucket["minWeight"]
+    min_weight = _bucket_min_weight(bucket)
+    target_weight = _bucket_target_weight(bucket)
 
     # --- upgradePercentage ---
-    upgrade_count = sum(1 for s in combo if s["targetWeight"] > min_weight)
-    upgrade_percentage = (upgrade_count / len(combo)) * 100 if combo else 0.0
+    upgrade_mu = config_values.get("upgrade_mu", 0.0)
+    upgrade_sigma = config_values.get("upgrade_sigma", 0.0)
+    max_weight = bucket["maxWeight"]
+
+    if upgrade_mu > 0 and upgrade_sigma > 0 and max_weight > min_weight:
+        try:
+            _, _, expected_trim = _mc_truncated_avg_pdf(
+                mu=upgrade_mu,
+                sigma=upgrade_sigma,
+                lower_bound=min_weight,
+                upper_bound=max_weight,
+            )
+            upgrade_percentage = max(0.0, min(100.0, (1.0 - expected_trim) * 100.0))
+        except ValueError:
+            if target_weight > 0:
+                upgrade_percentage = min(100.0, (mix_weight / target_weight) * 100)
+            else:
+                upgrade_percentage = 0.0
+    elif target_weight > 0:
+        upgrade_percentage = min(100.0, (mix_weight / target_weight) * 100)
+    else:
+        upgrade_percentage = 0.0
 
     # --- trimPercentage ---
-    if mix_weight > min_weight:
-        trim_percentage = ((mix_weight - min_weight) / mix_weight) * 100
-    else:
-        trim_percentage = 0.0
+    trim_percentage = 1.0 - upgrade_percentage
 
     # --- value ---
     fds_weight = sum(s["targetWeight"] for s in combo if s.get("customerType") == "FDS")
     rtl_weight = sum(s["targetWeight"] for s in combo if s.get("customerType") == "RTL")
+    # -- YOU CAN ADD ADDITIONAL CUSTOMER TYPES HERE
     trim_weight = max(0.0, mix_weight - min_weight)
     value = (
         fds_weight * config_values.get("fds_value", 0.0)
@@ -450,15 +671,17 @@ def _compute_mix_metric(
     unit_plan: List[Dict] = []
     seen_trade_numbers: List[str] = []
 
-    for sku in combo:
+    if part_assignments is None:
+        part_assignments = [skus_map.get(str(sku["tradeNumber"]), "") for sku in combo]
+
+    for sku, part_code in zip(combo, part_assignments):
         trade_number = sku["tradeNumber"]
-        part_code = skus_map.get(trade_number, "")
         units_per_cut = sku.get("unitsPerCut", 1)
         target_weight = sku["targetWeight"]
 
         if (
             includes_nug
-            and sku.get("productType") == "NUGGET"
+            and _is_nugget_product(sku.get("productType"))
             and nugget_target_weight is not None
             and nugget_target_weight > 0
         ):
@@ -516,7 +739,7 @@ def _upsert_mix(mix_repo: MixRepository, mix_doc: Dict[str, Any]) -> str:
     """
     # Ensure skuSetKey is present on the document
     if "skuSetKey" not in mix_doc:
-        mix_doc["skuSetKey"] = "|".join(sorted(mix_doc["skus"].keys()))
+        mix_doc["skuSetKey"] = "|".join(sorted(mix_doc.get("skuKeys", mix_doc["skus"].keys())))
 
     sku_set_key = mix_doc["skuSetKey"]
     mfg_type = mix_doc["mfgType"]
@@ -642,18 +865,24 @@ def run_enumeration(
                 return
 
             valid_strategies = _get_valid_cut_strategies(combo, cut_strategies)
-            mix_weight = sum(s["targetWeight"] for s in combo)
 
             for strategy in valid_strategies:
                 mix_doc = _build_mix(combo, strategy, plant_filter, bird_size_filter)
+                part_assignments = mix_doc.pop("_partAssignments", None)
 
                 # Build skuSetKey before upsert
-                mix_doc["skuSetKey"] = "|".join(sorted(mix_doc["skus"].keys()))
+                mix_doc["skuSetKey"] = "|".join(sorted(mix_doc.get("skuKeys", mix_doc["skus"].keys())))
 
                 # Check bucket fit and compute metrics
                 fitting_metrics = []
                 for bucket in buckets:
-                    if _fits_bucket(mix_weight, bucket, config_values["tolerance_pct"]):
+                    planned_weight = _planned_bucket_weight(
+                        combo,
+                        bucket,
+                        mix_doc["includesNug"],
+                        mix_doc.get("nuggetTargetWeight"),
+                    )
+                    if _fits_bucket(planned_weight, bucket, config_values["tolerance_pct"]):
                         metric = _compute_mix_metric(
                             None,
                             combo,
@@ -662,6 +891,7 @@ def run_enumeration(
                             mix_doc["includesNug"],
                             mix_doc.get("nuggetTargetWeight"),
                             config_values,
+                            part_assignments=part_assignments,
                         )
                         fitting_metrics.append(metric)
 

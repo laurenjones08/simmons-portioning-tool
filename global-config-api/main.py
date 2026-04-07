@@ -265,12 +265,18 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Router registration
-from routers import config_router
+from routers import config_router, line_router
 
 app.include_router(
     config_router.router,
     prefix="/config",
     tags=["Configuration"]
+)
+
+app.include_router(
+    line_router.router,
+    prefix="/lines",
+    tags=["Lines"]
 )
 
 

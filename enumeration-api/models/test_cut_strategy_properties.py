@@ -30,3 +30,10 @@ def test_cut_strategy_rejects_duplicate_parts():
     except ValidationError as exc:
         assert "parts must not contain duplicates" in str(exc)
 
+
+def test_cut_strategy_normalizes_whitespace_parts():
+    payload = valid_payload()
+    payload["parts"] = [" d", " V "]
+
+    strategy = CutStrategy(**payload)
+    assert strategy.parts == ["D", "V"]

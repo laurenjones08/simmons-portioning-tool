@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 
 import mongomock
 import pytest
-from hypothesis import given, settings, strategies as st, HealthCheck
+from hypothesis import assume, given, settings, strategies as st, HealthCheck
 
 # Ensure the service root is on sys.path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -164,11 +164,18 @@ def test_property2_bird_size_filter_returns_only_matching_skus(
 
 
 # ---------------------------------------------------------------------------
-# Property 3 — _fetch_config_values returns dict with all four float keys
+# Property 3 — _fetch_config_values returns dict with all runtime float keys
 # **Validates: Requirements 6.4**
 # ---------------------------------------------------------------------------
 
-EXPECTED_KEYS = {"tolerance_pct", "fds_value", "rtl_value", "trim_value"}
+EXPECTED_KEYS = {
+    "tolerance_pct",
+    "fds_value",
+    "rtl_value",
+    "trim_value",
+    "upgrade_mu",
+    "upgrade_sigma",
+}
 
 
 @given(
@@ -176,13 +183,15 @@ EXPECTED_KEYS = {"tolerance_pct", "fds_value", "rtl_value", "trim_value"}
     fds=st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False),
     rtl=st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False),
     trim=st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False),
+    upgrade_mu=st.floats(min_value=1.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    upgrade_sigma=st.floats(min_value=0.1, max_value=100.0, allow_nan=False, allow_infinity=False),
 )
 @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
-def test_property3_fetch_config_values_returns_all_four_float_keys(
-    tolerance, fds, rtl, trim
+def test_property3_fetch_config_values_returns_all_runtime_float_keys(
+    tolerance, fds, rtl, trim, upgrade_mu, upgrade_sigma
 ):
     """
-    Property 3: _fetch_config_values returns a dict with all four expected keys;
+    Property 3: _fetch_config_values returns a dict with all expected runtime keys;
     each value is a float.
 
     **Validates: Requirements 6.4**
@@ -192,6 +201,8 @@ def test_property3_fetch_config_values_returns_all_four_float_keys(
         "enumeration.fdsValueCoefficient": fds,
         "enumeration.rtlValueCoefficient": rtl,
         "enumeration.trimValueCoefficient": trim,
+        "enumeration.upgradeDistributionMu": upgrade_mu,
+        "enumeration.upgradeDistributionSigma": upgrade_sigma,
     }
 
     def mock_get(url, timeout=5):
@@ -391,12 +402,12 @@ def valid_combo_and_strategy(draw):
     """
     Build a (combo, strategy) pair where the strategy is guaranteed to be
     valid for the combo (every part in strategy["parts"] is covered by at
-    least one SKU's allowedParts).
+    least one SKU's allowedParts, and non-nugget / non-strip SKUs do not
+    share part codes.
     """
     # Draw 1-4 SKUs with unique trade numbers
     size = draw(st.integers(min_value=1, max_value=4))
     skus = []
-    used_parts = set()
     for i in range(size):
         parts = draw(st.lists(part_code_strategy, min_size=1, max_size=4, unique=True))
         product_type = draw(st.sampled_from(["FILET", "TENDER", "NUGGET"]))
@@ -416,19 +427,45 @@ def valid_combo_and_strategy(draw):
             "unitsPerCut": draw(st.integers(min_value=1, max_value=10)),
         }
         skus.append(sku)
-        used_parts.update(parts)
 
-    # Build a strategy whose parts are a subset of the union of allowedParts
-    combo_has_nugget = any(s["productType"] == "NUGGET" for s in skus)
-    available_parts = list(used_parts)
-    strategy_parts = draw(
-        st.lists(
-            st.sampled_from(available_parts),
-            min_size=1,
-            max_size=min(3, len(available_parts)),
-            unique=True,
-        )
-    )
+    # Find one valid per-occurrence assignment where only nuggets / strips may
+    # reuse part codes.
+    combo_has_nugget = any(s["productType"] in {"NUGGET", "NUGGET|STRIP"} for s in skus)
+    assignments = [None] * len(skus)
+    used_non_nugget_parts = set()
+
+    def search(index: int) -> bool:
+        if index >= len(skus):
+            return True
+
+        sku = skus[index]
+        is_nugget = sku["productType"] in {"NUGGET", "NUGGET|STRIP"}
+        for part in sku["allowedParts"]:
+            if not is_nugget and part in used_non_nugget_parts:
+                continue
+
+            assignments[index] = part
+            added_part = False
+            if not is_nugget:
+                used_non_nugget_parts.add(part)
+                added_part = True
+
+            if search(index + 1):
+                return True
+
+            assignments[index] = None
+            if added_part:
+                used_non_nugget_parts.remove(part)
+
+        return False
+
+    assume(search(0))
+
+    strategy_parts = []
+    for part in assignments:
+        if part not in strategy_parts:
+            strategy_parts.append(part)
+
     strategy = {
         "_id": draw(st.text(alphabet="0123456789abcdef", min_size=4, max_size=8)),
         "parts": strategy_parts,
@@ -768,6 +805,12 @@ def mix_metric_inputs(draw, force_includes_nug=None):
         "trim_value": draw(
             st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False)
         ),
+        "upgrade_mu": draw(
+            st.floats(min_value=1.0, max_value=1000.0, allow_nan=False, allow_infinity=False)
+        ),
+        "upgrade_sigma": draw(
+            st.floats(min_value=0.1, max_value=100.0, allow_nan=False, allow_infinity=False)
+        ),
     }
 
     return skus, skus_map, bucket, includes_nug, nugget_target_weight, config_values
@@ -900,7 +943,12 @@ def mix_metric_inputs_with_nug(draw):
     max_w = draw(
         st.floats(min_value=min_w, max_value=min_w + 500.0, allow_nan=False, allow_infinity=False)
     )
-    bucket = {"_id": "bucket1", "minWeight": min_w, "maxWeight": max_w}
+    bucket = {
+        "_id": "bucket1",
+        "minWeight": min_w,
+        "targetWeight": min_w,
+        "maxWeight": max_w,
+    }
 
     nugget_sku = skus[nugget_idx]
     nugget_target_weight = nugget_sku["targetWeight"]
@@ -978,7 +1026,12 @@ def mix_metric_inputs_no_nug(draw):
     max_w = draw(
         st.floats(min_value=min_w, max_value=min_w + 500.0, allow_nan=False, allow_infinity=False)
     )
-    bucket = {"_id": "bucket1", "minWeight": min_w, "maxWeight": max_w}
+    bucket = {
+        "_id": "bucket1",
+        "minWeight": min_w,
+        "targetWeight": min_w,
+        "maxWeight": max_w,
+    }
 
     config_values = {
         "tolerance_pct": 0.0,
@@ -1242,6 +1295,7 @@ def make_bucket(bid, min_w, max_w):
     return {
         "_id": bid,
         "minWeight": min_w,
+        "targetWeight": min_w,
         "maxWeight": max_w,
     }
 
