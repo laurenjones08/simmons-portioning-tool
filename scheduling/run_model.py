@@ -31,9 +31,6 @@ def main():
     print("production_vs_demand_by_shift:")
     print(results["outputs"]["production_vs_demand_by_shift"].head(25), "\n")
 
-    print("nonpreferred_usage:")
-    print(results["outputs"]["nonpreferred_usage"].head(20), "\n")
-
     print("bucket_usage_by_shift:")
     print(results["outputs"]["bucket_usage_by_shift"].head(20), "\n")
 

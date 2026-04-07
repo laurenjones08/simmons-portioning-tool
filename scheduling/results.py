@@ -8,41 +8,38 @@ pd.set_option("display.max_colwidth", 80)
 
 
 def format_line_name(l):
-    s = str(l).strip()
-
-    if s.lower().startswith("line"):
-        return "Line" + s[4:]
-
-    return f"Line{s}"
+    return str(l).strip()
 
 
-def extract_decision_assignments(model, bucket_of_k):
+def extract_decision_assignments(model, bucket_of_k, line_of_k):
     rows = []
 
     for k in model.K:
-        for l in model.L:
-            for t in model.T:
-                val = value(model.x[k, l, t])
-                if val is not None and val > 1e-6:
-                    rows.append({
-                        "decision": k,
-                        "bucket": bucket_of_k[k],
-                        "line": format_line_name(l),
-                        "shift": int(t),
-                        "assigned_lbs": round(float(val), 3)
-                    })
+        for t in model.T:
+            val = value(model.x[k, t])
+            if val is not None and val > 1e-6:
+                rows.append({
+                    "decision": k,
+                    "bucket": bucket_of_k[k],
+                    "line": format_line_name(line_of_k[k]),
+                    "shift": int(t),
+                    "assigned_lbs": round(float(val), 3)
+                })
 
     return pd.DataFrame(rows)
 
 
-def extract_line_schedule(model):
+def extract_line_schedule(model, line_of_k):
     rows = []
 
     for t in model.T:
         for l in model.L:
             cuts = []
             for k in model.K:
-                val = value(model.x[k, l, t])
+                if line_of_k[k] != l:
+                    continue
+
+                val = value(model.x[k, t])
                 if val is not None and val > 1e-6:
                     cuts.append(f"{k} ({val:.0f} lbs)")
 
@@ -63,7 +60,7 @@ def extract_pattern_mix_by_shift(model):
         total = 0.0
 
         for k in model.K:
-            amt = sum(value(model.x[k, l, t]) for l in model.L)
+            amt = value(model.x[k, t])
             amt = float(amt) if amt is not None else 0.0
             row[str(k)] = round(amt, 2)
             total += amt
@@ -105,23 +102,26 @@ def extract_production_vs_demand(model, D_short, D_long, D_eff, week1_days):
     return pd.DataFrame(rows)
 
 
-def extract_line_load(model, rate, hours_available):
+def extract_line_load(model, rate, hours_available, line_of_k, line_throughput):
     rows = []
 
     for t in model.T:
         for l in model.L:
             total_input = sum(
-                value(model.x[k, l, t]) for k in model.K
+                value(model.x[k, t])
+                for k in model.K
+                if line_of_k[k] == l and value(model.x[k, t]) is not None
             )
             total_input = float(total_input) if total_input is not None else 0.0
 
             hours_used = sum(
-                value(model.x[k, l, t]) / rate[k]
+                value(model.x[k, t]) / rate[k]
                 for k in model.K
-                if rate[k] > 0 and value(model.x[k, l, t]) is not None
+                if line_of_k[k] == l and rate[k] > 0 and value(model.x[k, t]) is not None
             )
 
             hrs = float(hours_available.get((l, t), 0.0))
+            throughput_cap_lbs = float(line_throughput.get(l, 0.0)) * hrs
 
             rows.append({
                 "shift": int(t),
@@ -129,28 +129,10 @@ def extract_line_load(model, rate, hours_available):
                 "total_input_lbs": round(total_input, 2),
                 "hours_used": round(hours_used, 2),
                 "hours_available": round(hrs, 2),
-                "util_pct": round(hours_used / hrs * 100, 1) if hrs > 0 else 0.0
+                "util_pct": round(hours_used / hrs * 100, 1) if hrs > 0 else 0.0,
+                "throughput_cap_lbs": round(throughput_cap_lbs, 2),
+                "throughput_util_pct": round(total_input / throughput_cap_lbs * 100, 1) if throughput_cap_lbs > 0 else 0.0,
             })
-
-    return pd.DataFrame(rows)
-
-
-def extract_nonpreferred_usage(model, preferred_matrix, bucket_of_k):
-    rows = []
-
-    for k in model.K:
-        for l in model.L:
-            for t in model.T:
-                val = value(model.x[k, l, t])
-                if val is not None and val > 1e-6 and preferred_matrix.get((k, l), 0) == 0:
-                    rows.append({
-                        "decision": k,
-                        "bucket": bucket_of_k[k],
-                        "line": format_line_name(l),
-                        "shift": int(t),
-                        "assigned_lbs": round(float(val), 3),
-                        "nonpreferred": 1
-                    })
 
     return pd.DataFrame(rows)
 
@@ -161,10 +143,9 @@ def extract_bucket_usage(model, bucket_of_k, wip):
     for t in model.T:
         for b in model.B:
             used = sum(
-                value(model.x[k, l, t])
+                value(model.x[k, t])
                 for k in model.K
-                for l in model.L
-                if bucket_of_k[k] == b
+                if bucket_of_k[k] == b and value(model.x[k, t]) is not None
             )
             used = float(used) if used is not None else 0.0
             avail = float(wip.get((b, t), 0.0))
@@ -193,8 +174,17 @@ def save_results(df_dict, output_dir="outputs"):
 
 
 def extract_all_results(model, inputs):
-    decision_df = extract_decision_assignments(model, inputs["bucket_of_k"])
-    line_schedule_df = extract_line_schedule(model)
+    decision_df = extract_decision_assignments(
+        model,
+        inputs["bucket_of_k"],
+        inputs["line_of_k"]
+    )
+
+    line_schedule_df = extract_line_schedule(
+        model,
+        inputs["line_of_k"]
+    )
+
     pattern_mix_df = extract_pattern_mix_by_shift(model)
 
     prod_vs_dem_df = extract_production_vs_demand(
@@ -205,9 +195,19 @@ def extract_all_results(model, inputs):
         week1_days=inputs["week1_days"],
     )
 
-    line_load_df = extract_line_load(model, inputs["R"], inputs["H"])
-    nonpreferred_df = extract_nonpreferred_usage(model, inputs["A"], inputs["bucket_of_k"])
-    bucket_usage_df = extract_bucket_usage(model, inputs["bucket_of_k"], inputs["WIP"])
+    line_load_df = extract_line_load(
+        model,
+        inputs["R"],
+        inputs["H"],
+        inputs["line_of_k"],
+        inputs["line_throughput"]
+    )
+
+    bucket_usage_df = extract_bucket_usage(
+        model,
+        inputs["bucket_of_k"],
+        inputs["WIP"]
+    )
 
     return {
         "x_long_nonzero": decision_df,
@@ -215,6 +215,5 @@ def extract_all_results(model, inputs):
         "pattern_mix_by_shift": pattern_mix_df,
         "line_load_by_shift": line_load_df,
         "production_vs_demand_by_shift": prod_vs_dem_df,
-        "nonpreferred_usage": nonpreferred_df,
         "bucket_usage_by_shift": bucket_usage_df,
     }

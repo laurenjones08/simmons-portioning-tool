@@ -21,11 +21,11 @@ def run_pipeline(short_term_file=None, save_csv=True, output_dir="outputs", tee=
         V=inputs["V"],
         R=inputs["R"],
         H=inputs["H"],
-        A=inputs["A"],
         bucket_of_k=inputs["bucket_of_k"],
+        line_of_k=inputs["line_of_k"],
         L_delay=inputs["L_delay"],
+        line_throughput=inputs["line_throughput"],
         gamma=inputs["gamma"],
-        beta=inputs["beta"],
     )
 
     # 3. Solve
