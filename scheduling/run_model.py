@@ -22,17 +22,20 @@ def main():
     print("line_schedule:")
     print(results["outputs"]["line_schedule"].head(20), "\n")
 
-    print("pattern_mix_by_shift:")
-    print(results["outputs"]["pattern_mix_by_shift"].head(10), "\n")
+    print("pattern_mix_by_date:")
+    print(results["outputs"]["pattern_mix_by_date"].head(10), "\n")
 
-    print("line_load_by_shift:")
-    print(results["outputs"]["line_load_by_shift"].head(20), "\n")
+    print("line_load_by_date:")
+    print(results["outputs"]["line_load_by_date"].head(20), "\n")
 
-    print("production_vs_demand_by_shift:")
-    print(results["outputs"]["production_vs_demand_by_shift"].head(25), "\n")
+    print("production_vs_demand_by_date:")
+    print(results["outputs"]["production_vs_demand_by_date"].head(25), "\n")
 
-    print("bucket_usage_by_shift:")
-    print(results["outputs"]["bucket_usage_by_shift"].head(20), "\n")
+    print("monthly_contract_summary:")
+    print(results["outputs"]["monthly_contract_summary"].head(20), "\n")
+
+    print("bucket_usage_by_date:")
+    print(results["outputs"]["bucket_usage_by_date"].head(20), "\n")
 
     print("All outputs written to: outputs")
 
