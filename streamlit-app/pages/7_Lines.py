@@ -109,6 +109,7 @@ if lines:
                 "friendlyName": line.get("friendlyName", ""),
                 "lineType": line.get("lineType", ""),
                 "plant": line.get("plant", ""),
+                "hoursOfLaborAvailablePerShift": line.get("hoursOfLaborAvailablePerShift"),
                 "isActive": line.get("isActive", False),
                 "permittedCutStrategyIds": ", ".join(line.get("permittedCutStrategyIds", [])),
             }
@@ -126,6 +127,12 @@ with st.form("create_line_form", clear_on_submit=True):
     create_line_type = st.selectbox("Line type *", options=LINE_TYPE_OPTIONS)
     create_strategy_ids, create_strategy_labels = _strategy_options(create_line_type)
     create_plant = st.text_input("Plant *")
+    create_hours_of_labor = st.number_input(
+        "Hours of labor available per shift *",
+        min_value=0.1,
+        value=8.0,
+        step=0.5,
+    )
     create_is_active = st.checkbox("Active", value=True)
     create_cut_strategy_ids = st.multiselect(
         "Permitted cut strategies",
@@ -140,6 +147,7 @@ if create_clicked:
         "friendlyName": create_friendly_name.strip(),
         "lineType": create_line_type,
         "plant": create_plant.strip(),
+        "hoursOfLaborAvailablePerShift": float(create_hours_of_labor),
         "isActive": create_is_active,
         "permittedCutStrategyIds": create_cut_strategy_ids,
     }
@@ -172,6 +180,12 @@ else:
         )
         edit_strategy_ids, edit_strategy_labels = _strategy_options(edit_line_type)
         edit_plant = st.text_input("Plant *", value=selected_line.get("plant", ""))
+        edit_hours_of_labor = st.number_input(
+            "Hours of labor available per shift *",
+            min_value=0.1,
+            value=float(selected_line.get("hoursOfLaborAvailablePerShift", 8.0)),
+            step=0.5,
+        )
         edit_is_active = st.checkbox("Active", value=bool(selected_line.get("isActive", True)))
         edit_cut_strategy_ids = st.multiselect(
             "Permitted cut strategies",
@@ -186,6 +200,7 @@ else:
             "friendlyName": edit_friendly_name.strip(),
             "lineType": edit_line_type,
             "plant": edit_plant.strip(),
+            "hoursOfLaborAvailablePerShift": float(edit_hours_of_labor),
             "isActive": edit_is_active,
             "permittedCutStrategyIds": edit_cut_strategy_ids,
         }

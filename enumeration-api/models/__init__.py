@@ -7,6 +7,7 @@ This package contains Pydantic models for data validation and serialization.
 from .sku import SKU, SearchCriteria, BatchImportRequest, BatchImportResult
 from .mix import MIX, MfgType, MixCreate, MixUpdate, MixSearchCriteria
 from .bucket import Bucket, BucketCreate, BucketSearchCriteria, BucketUpdate
+from .unit_plan_item import UnitPlanItem
 from .cut_strategy import (
     CutStrategy,
     CutStrategyCreate,
@@ -31,6 +32,7 @@ __all__ = [
     "BucketCreate",
     "BucketUpdate",
     "BucketSearchCriteria",
+    "UnitPlanItem",
     "CutStrategy",
     "CutStrategyCreate",
     "CutStrategyUpdate",

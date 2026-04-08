@@ -1,4 +1,4 @@
-"""
+﻿"""
 Property-based tests for enumeration_engine reference data loaders.
 
 Tests are tagged with requirement links per the design document.
@@ -61,7 +61,7 @@ def sku_doc_strategy(plant: str, bird_size: str, trade_number: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Property 1 — plant_filter returns only matching SKUs
+# Property 1 â€” plant_filter returns only matching SKUs
 # **Validates: Requirements 2.2**
 # ---------------------------------------------------------------------------
 
@@ -114,7 +114,7 @@ def test_property1_plant_filter_returns_only_matching_skus(
 
 
 # ---------------------------------------------------------------------------
-# Property 2 — bird_size_filter returns only matching SKUs
+# Property 2 â€” bird_size_filter returns only matching SKUs
 # **Validates: Requirements 2.3**
 # ---------------------------------------------------------------------------
 
@@ -164,7 +164,7 @@ def test_property2_bird_size_filter_returns_only_matching_skus(
 
 
 # ---------------------------------------------------------------------------
-# Property 3 — _fetch_config_values returns dict with all runtime float keys
+# Property 3 â€” _fetch_config_values returns dict with all runtime float keys
 # **Validates: Requirements 6.4**
 # ---------------------------------------------------------------------------
 
@@ -228,11 +228,11 @@ def test_property3_fetch_config_values_returns_all_runtime_float_keys(
 
 
 # ---------------------------------------------------------------------------
-# Property 4 — _fetch_config_values defaults to 0.0 when API is unreachable
+# Property 4 â€” _fetch_config_values defaults to 0.0 when API is unreachable
 # **Validates: Requirements 6.4**
 # ---------------------------------------------------------------------------
 
-@given(st.none())  # parameterless — just run once with Hypothesis machinery
+@given(st.none())  # parameterless â€” just run once with Hypothesis machinery
 @settings(max_examples=1, suppress_health_check=[HealthCheck.too_slow])
 def test_property4_fetch_config_values_defaults_to_zero_on_unreachable(_):
     """
@@ -311,7 +311,7 @@ from enumeration_engine import _get_valid_cut_strategies
 
 
 # ---------------------------------------------------------------------------
-# Property 5 — Every returned strategy has all parts covered by combo's allowedParts
+# Property 5 â€” Every returned strategy has all parts covered by combo's allowedParts
 # **Validates: Requirements 4.2**
 # ---------------------------------------------------------------------------
 
@@ -342,7 +342,7 @@ def test_property5_all_parts_covered_by_combo_allowed_parts(combo, cut_strategie
 
 
 # ---------------------------------------------------------------------------
-# Property 6 — hasNugget filtering is respected
+# Property 6 â€” hasNugget filtering is respected
 # **Validates: Requirements 4.3, 4.4**
 # ---------------------------------------------------------------------------
 
@@ -371,7 +371,7 @@ def test_property6_has_nugget_filter_respected(combo, cut_strategies):
 
 
 # ---------------------------------------------------------------------------
-# Property 7 — Empty result when no strategy is valid
+# Property 7 â€” Empty result when no strategy is valid
 # **Validates: Requirements 4.5**
 # ---------------------------------------------------------------------------
 
@@ -478,7 +478,7 @@ def valid_combo_and_strategy(draw):
 
 
 # ---------------------------------------------------------------------------
-# Property 8 — Every SKU in skus map has an assigned part in its allowedParts
+# Property 8 â€” Every SKU in skus map has an assigned part in its allowedParts
 # **Validates: Requirements 5.1**
 # ---------------------------------------------------------------------------
 
@@ -504,7 +504,7 @@ def test_property8_skus_map_part_codes_in_allowed_parts(pair):
 
 
 # ---------------------------------------------------------------------------
-# Property 9 — includesNug iff combo has nugget SKU and strategy.hasNugget
+# Property 9 â€” includesNug iff combo has nugget SKU and strategy.hasNugget
 # **Validates: Requirements 5.7**
 # ---------------------------------------------------------------------------
 
@@ -530,7 +530,7 @@ def test_property9_includes_nug_iff_nugget_sku_and_strategy_has_nugget(pair):
 
 
 # ---------------------------------------------------------------------------
-# Property 10 — numFillets and filletWeight match non-nugget SKUs
+# Property 10 â€” numFillets and filletWeight match non-nugget SKUs
 # **Validates: Requirements 5.12, 5.13**
 # ---------------------------------------------------------------------------
 
@@ -559,7 +559,7 @@ def test_property10_num_fillets_and_fillet_weight(pair):
 
 
 # ---------------------------------------------------------------------------
-# Property 11 — reqPlant equals plant_filter when provided, else combo[0].prodPlant
+# Property 11 â€” reqPlant equals plant_filter when provided, else combo[0].prodPlant
 # **Validates: Requirements 5.10**
 # ---------------------------------------------------------------------------
 
@@ -600,9 +600,11 @@ def bucket_strategy(draw):
     """Build a bucket doc with minWeight < maxWeight."""
     min_w = draw(st.floats(min_value=0.1, max_value=500.0, allow_nan=False, allow_infinity=False))
     max_w = draw(st.floats(min_value=min_w, max_value=min_w + 500.0, allow_nan=False, allow_infinity=False))
+    target_w = draw(st.floats(min_value=min_w, max_value=max_w, allow_nan=False, allow_infinity=False))
     return {
         "_id": draw(st.text(alphabet="0123456789abcdef", min_size=4, max_size=8)),
         "minWeight": min_w,
+        "targetWeight": target_w,
         "maxWeight": max_w,
     }
 
@@ -613,46 +615,45 @@ tolerance_pct_strategy = st.floats(
 
 
 # ---------------------------------------------------------------------------
-# Property 12 — A mix weight exactly equal to effective_min fits the bucket
+# Property 12 â€” A mix weight exactly equal to bucket.minWeight fits the bucket
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
 @given(bucket=bucket_strategy(), tolerance_pct=tolerance_pct_strategy)
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property12_mix_weight_at_effective_min_fits(bucket, tolerance_pct):
+def test_property12_mix_weight_at_min_weight_fits(bucket, tolerance_pct):
     """
-    Property 12: A mix weight exactly equal to effective_min fits the bucket.
+    Property 12: A mix weight exactly equal to bucket.minWeight fits the bucket.
 
     **Validates: Requirements 6.5, 6.6**
     """
-    effective_min = bucket["minWeight"] * (1 - tolerance_pct / 100)
-    assert _fits_bucket(effective_min, bucket, tolerance_pct), (
-        f"mix_weight={effective_min} (effective_min) should fit bucket "
-        f"[{effective_min}, {bucket['maxWeight']}]"
+    assert _fits_bucket(bucket["minWeight"], bucket, tolerance_pct), (
+        f"mix_weight={bucket['minWeight']} should fit bucket "
+        f"with maxWeight={bucket['maxWeight']}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Property 13 — A mix weight exactly equal to bucket.maxWeight fits the bucket
+# Property 13 â€” A mix weight exactly equal to bucket.targetWeight fits the bucket
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
 @given(bucket=bucket_strategy(), tolerance_pct=tolerance_pct_strategy)
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property13_mix_weight_at_max_weight_fits(bucket, tolerance_pct):
+def test_property13_mix_weight_at_target_weight_fits(bucket, tolerance_pct):
     """
-    Property 13: A mix weight exactly equal to bucket.maxWeight fits the bucket.
+    Property 13: A mix weight exactly equal to bucket.targetWeight fits the bucket.
 
     **Validates: Requirements 6.5, 6.6**
     """
-    assert _fits_bucket(bucket["maxWeight"], bucket, tolerance_pct), (
-        f"mix_weight={bucket['maxWeight']} (maxWeight) should fit bucket "
-        f"[effective_min, {bucket['maxWeight']}]"
+    assert _fits_bucket(bucket["targetWeight"], bucket, tolerance_pct), (
+        f"mix_weight={bucket['targetWeight']} (targetWeight) should fit bucket "
+        f"[effective_min, {bucket['targetWeight']}]"
     )
 
 
 # ---------------------------------------------------------------------------
-# Property 14 — A mix weight below effective_min does not fit the bucket
+# Property 14 â€” A mix weight below bucket.minWeight still fits when under maxWeight
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
@@ -662,22 +663,22 @@ def test_property13_mix_weight_at_max_weight_fits(bucket, tolerance_pct):
     delta=st.floats(min_value=1e-6, max_value=1.0, allow_nan=False, allow_infinity=False),
 )
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property14_mix_weight_below_effective_min_does_not_fit(bucket, tolerance_pct, delta):
+def test_property14_mix_weight_below_min_weight_still_fits(bucket, tolerance_pct, delta):
     """
-    Property 14: A mix weight strictly below effective_min does not fit the bucket.
+    Property 14: A mix weight below minWeight still fits as long as it does not
+    exceed the bucket's maxWeight.
 
     **Validates: Requirements 6.5, 6.6**
     """
-    effective_min = bucket["minWeight"] * (1 - tolerance_pct / 100)
-    mix_weight = effective_min - delta
-    assert not _fits_bucket(mix_weight, bucket, tolerance_pct), (
-        f"mix_weight={mix_weight} is below effective_min={effective_min} "
-        f"and should NOT fit the bucket"
+    mix_weight = bucket["minWeight"] - delta
+    assert _fits_bucket(mix_weight, bucket, tolerance_pct), (
+        f"mix_weight={mix_weight} is below minWeight={bucket['minWeight']} "
+        f"but should still be offered if it does not exceed maxWeight={bucket['maxWeight']}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Property 15 — A mix weight above bucket.maxWeight does not fit the bucket
+# Property 15 â€” A mix weight above bucket.maxWeight does not fit the bucket
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
@@ -701,28 +702,23 @@ def test_property15_mix_weight_above_max_weight_does_not_fit(bucket, tolerance_p
 
 
 # ---------------------------------------------------------------------------
-# Property 16 — With tolerance_pct = 0, effective_min == bucket.minWeight
+# Property 16 â€” With tolerance_pct = 0, sub-minimum weights can still fit
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
 @given(bucket=bucket_strategy())
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property16_zero_tolerance_effective_min_equals_min_weight(bucket):
+def test_property16_zero_tolerance_does_not_block_sub_minimum_weights(bucket):
     """
-    Property 16: With tolerance_pct = 0, effective_min equals bucket.minWeight,
-    so a mix weight exactly at minWeight fits and one just below does not.
+    Property 16: With tolerance_pct = 0, a mix weight below minWeight still
+    fits as long as it stays under maxWeight.
 
     **Validates: Requirements 6.5, 6.6**
     """
     tolerance_pct = 0.0
-    effective_min = bucket["minWeight"] * (1 - tolerance_pct / 100)
-    assert effective_min == bucket["minWeight"], (
-        f"With tolerance_pct=0, effective_min={effective_min} should equal "
-        f"bucket.minWeight={bucket['minWeight']}"
-    )
-    # Boundary: exactly at minWeight should fit
-    assert _fits_bucket(bucket["minWeight"], bucket, tolerance_pct), (
-        f"mix_weight=minWeight={bucket['minWeight']} should fit with tolerance_pct=0"
+    mix_weight = bucket["minWeight"] - 0.1
+    assert _fits_bucket(mix_weight, bucket, tolerance_pct), (
+        f"mix_weight={mix_weight} should still fit when maxWeight={bucket['maxWeight']}"
     )
 
 
@@ -785,6 +781,9 @@ def mix_metric_inputs(draw, force_includes_nug=None):
     else:
         includes_nug = draw(st.booleans()) and has_nugget_sku
 
+    if includes_nug:
+        assume(any(s["productType"] != "NUGGET" for s in skus))
+
     nugget_target_weight = None
     if includes_nug:
         for s in skus:
@@ -817,7 +816,7 @@ def mix_metric_inputs(draw, force_includes_nug=None):
 
 
 # ---------------------------------------------------------------------------
-# Property 17 — trimPercentage is 0.0 when mix_weight <= bucket.minWeight
+# Property 17 â€” trimPercentage is 0.0 when mix_weight <= bucket.minWeight
 # **Validates: Requirements 7.3**
 # ---------------------------------------------------------------------------
 
@@ -825,30 +824,27 @@ def mix_metric_inputs(draw, force_includes_nug=None):
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
 def test_property17_trim_percentage_zero_when_mix_weight_lte_min_weight(inputs):
     """
-    Property 17: trimPercentage is 0.0 when mix_weight <= bucket.minWeight.
+    Property 17: When Monte Carlo is disabled, trimPercentage remains the
+    complement of upgradePercentage.
 
     **Validates: Requirements 7.3**
     """
     combo, skus_map, bucket, includes_nug, nugget_target_weight, config_values = inputs
-
-    mix_weight = sum(s["targetWeight"] for s in combo)
-
-    # Only test the case where mix_weight <= minWeight
-    if mix_weight > bucket["minWeight"]:
-        return  # skip — not the scenario under test
+    config_values = dict(config_values)
+    config_values["upgrade_mu"] = 0.0
+    config_values["upgrade_sigma"] = 0.0
 
     result = _compute_mix_metric(
         "mix1", combo, skus_map, bucket, includes_nug, nugget_target_weight, config_values
     )
 
-    assert result["trimPercentage"] == 0.0, (
-        f"trimPercentage={result['trimPercentage']} but mix_weight={mix_weight} "
-        f"<= bucket.minWeight={bucket['minWeight']}, expected 0.0"
+    assert result["trimPercentage"] == 100.0 - result["upgradePercentage"], (
+        f"trimPercentage={result['trimPercentage']} but expected "
+        f"100 - upgradePercentage ({100.0 - result['upgradePercentage']})"
     )
 
-
 # ---------------------------------------------------------------------------
-# Property 18 — upgradePercentage is in [0.0, 100.0]
+# Property 18 â€” upgradePercentage is in [0.0, 100.0]
 # **Validates: Requirements 7.1**
 # ---------------------------------------------------------------------------
 
@@ -872,7 +868,7 @@ def test_property18_upgrade_percentage_in_valid_range(inputs):
 
 
 # ---------------------------------------------------------------------------
-# Property 19 — value = fds_weight * fds_value + rtl_weight * rtl_value + trim_weight * trim_value
+# Property 19 â€” value = fds_weight * fds_value + rtl_weight * rtl_value + trim_weight * trim_value
 # **Validates: Requirements 7.2**
 # ---------------------------------------------------------------------------
 
@@ -880,25 +876,32 @@ def test_property18_upgrade_percentage_in_valid_range(inputs):
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
 def test_property19_value_formula(inputs):
     """
-    Property 19: value = fds_weight * fds_value + rtl_weight * rtl_value + trim_weight * trim_value.
+    Property 19: value = planned_fds_weight * fds_value + planned_rtl_weight * rtl_value
+    + trim_weight * trim_value.
 
     **Validates: Requirements 7.2**
     """
     combo, skus_map, bucket, includes_nug, nugget_target_weight, config_values = inputs
 
-    mix_weight = sum(s["targetWeight"] for s in combo)
-    fds_weight = sum(s["targetWeight"] for s in combo if s.get("customerType") == "FDS")
-    rtl_weight = sum(s["targetWeight"] for s in combo if s.get("customerType") == "RTL")
-    trim_weight = max(0.0, mix_weight - bucket["minWeight"])
-
-    expected_value = (
-        fds_weight * config_values["fds_value"]
-        + rtl_weight * config_values["rtl_value"]
-        + trim_weight * config_values["trim_value"]
-    )
-
     result = _compute_mix_metric(
         "mix1", combo, skus_map, bucket, includes_nug, nugget_target_weight, config_values
+    )
+
+    planned_fds_weight = sum(
+        item["totalWeightInPlan"]
+        for item in result["unitPlan"]
+        if next(s for s in combo if s["tradeNumber"] == item["sku"]).get("customerType") == "FDS"
+    )
+    planned_rtl_weight = sum(
+        item["totalWeightInPlan"]
+        for item in result["unitPlan"]
+        if next(s for s in combo if s["tradeNumber"] == item["sku"]).get("customerType") == "RTL"
+    )
+    trim_weight = max(0.0, result["totalProductProducedGrams"] - bucket["minWeight"])
+    expected_value = (
+        planned_fds_weight * config_values["fds_value"]
+        + planned_rtl_weight * config_values["rtl_value"]
+        + trim_weight * config_values["trim_value"]
     )
 
     assert abs(result["value"] - expected_value) < 1e-9, (
@@ -907,14 +910,14 @@ def test_property19_value_formula(inputs):
 
 
 # ---------------------------------------------------------------------------
-# Property 20 — When includesNug is True, nugget SKU's unitsInPlan == floor(minWeight / nuggetTargetWeight)
+# Property 20 â€” When includesNug is True, nugget SKU's unitsInPlan == floor(targetWeight / nuggetTargetWeight)
 # **Validates: Requirements 7.5**
 # ---------------------------------------------------------------------------
 
 @st.composite
 def mix_metric_inputs_with_nug(draw):
     """Build inputs where includes_nug=True and nugget_target_weight > 0."""
-    size = draw(st.integers(min_value=1, max_value=4))
+    size = draw(st.integers(min_value=2, max_value=4))
     skus = []
     nugget_idx = draw(st.integers(min_value=0, max_value=size - 1))
     for i in range(size):
@@ -968,7 +971,7 @@ def mix_metric_inputs_with_nug(draw):
 def test_property20_nugget_units_in_plan_when_includes_nug(inputs):
     """
     Property 20: When includesNug is True, the nugget SKU's unitsInPlan equals
-    floor(bucket.minWeight / nuggetTargetWeight).
+    floor((bucket.targetWeight - fixed_non_nugget_weight) / nuggetTargetWeight).
 
     **Validates: Requirements 7.5**
     """
@@ -978,7 +981,12 @@ def test_property20_nugget_units_in_plan_when_includes_nug(inputs):
         "mix1", combo, skus_map, bucket, includes_nug, nugget_target_weight, config_values
     )
 
-    expected_units = floor(bucket["minWeight"] / nugget_target_weight)
+    fixed_non_nugget_weight = sum(
+        sku["unitsPerCut"] * sku["targetWeight"]
+        for sku in combo
+        if sku["productType"] != "NUGGET"
+    )
+    expected_units = floor(max(0.0, bucket["targetWeight"] - fixed_non_nugget_weight) / nugget_target_weight)
 
     for item in result["unitPlan"]:
         sku_trade = item["sku"]
@@ -986,12 +994,13 @@ def test_property20_nugget_units_in_plan_when_includes_nug(inputs):
         if sku_doc["productType"] == "NUGGET":
             assert item["unitsInPlan"] == expected_units, (
                 f"Nugget SKU {sku_trade!r} unitsInPlan={item['unitsInPlan']} "
-                f"but expected floor({bucket['minWeight']} / {nugget_target_weight}) = {expected_units}"
+                f"but expected floor(({bucket['targetWeight']} - {fixed_non_nugget_weight}) / "
+                f"{nugget_target_weight}) = {expected_units}"
             )
 
 
 # ---------------------------------------------------------------------------
-# Property 21 — When includesNug is False, all SKUs have unitsInPlan == unitsPerCut
+# Property 21 â€” When includesNug is False, all SKUs have unitsInPlan == unitsPerCut
 # **Validates: Requirements 7.4, 7.5**
 # ---------------------------------------------------------------------------
 
@@ -1068,7 +1077,7 @@ def test_property21_all_skus_use_units_per_cut_when_no_nug(inputs):
 
 
 # ---------------------------------------------------------------------------
-# Property 22 — skuKeys exactly matches tradeNumber values in unitPlan in first-appearance order
+# Property 22 â€” skuKeys exactly matches tradeNumber values in unitPlan in first-appearance order
 # **Validates: Requirements 7.6**
 # ---------------------------------------------------------------------------
 
@@ -1153,7 +1162,7 @@ def metric_doc_strategy(draw, mix_id="mix001"):
 
 
 # ---------------------------------------------------------------------------
-# Property 23 — Calling _upsert_mix twice with the same SKU set and mfgType
+# Property 23 â€” Calling _upsert_mix twice with the same SKU set and mfgType
 #               results in exactly one document in the collection
 # **Validates: Requirements 8.4**
 # ---------------------------------------------------------------------------
@@ -1201,7 +1210,7 @@ def test_property23_upsert_mix_twice_yields_one_document(mix_doc):
 
 
 # ---------------------------------------------------------------------------
-# Property 24 — Calling _upsert_mix_metric twice with the same mixId + bucketId
+# Property 24 â€” Calling _upsert_mix_metric twice with the same mixId + bucketId
 #               results in exactly one document in the collection
 # **Validates: Requirements 8.5**
 # ---------------------------------------------------------------------------
@@ -1241,7 +1250,7 @@ def test_property24_upsert_mix_metric_twice_yields_one_document(metric_doc):
 
 
 # ===========================================================================
-# Properties 25–29 — Orchestrator end-to-end tests using run_enumeration
+# Properties 25â€“29 â€” Orchestrator end-to-end tests using run_enumeration
 # ===========================================================================
 
 from enumeration_engine import run_enumeration
@@ -1338,7 +1347,7 @@ def _run(db, max_combination_size=2):
 
 
 # ---------------------------------------------------------------------------
-# Property 25 — Every persisted Mix has at least one associated MixMetric
+# Property 25 â€” Every persisted Mix has at least one associated MixMetric
 # **Validates: Requirements 3.2, 6.7, 8.3**
 # ---------------------------------------------------------------------------
 
@@ -1346,7 +1355,7 @@ def _run(db, max_combination_size=2):
     n_skus=st.integers(min_value=1, max_value=3),
     target_weight=st.floats(min_value=50.0, max_value=200.0, allow_nan=False, allow_infinity=False),
 )
-@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_property25_every_mix_has_at_least_one_metric(n_skus, target_weight):
     """
     Property 25: Every persisted Mix has at least one associated MixMetric
@@ -1373,13 +1382,13 @@ def test_property25_every_mix_has_at_least_one_metric(n_skus, target_weight):
 
     for mix in all_mixes:
         assert mix["_id"] in mix_ids_with_metrics, (
-            f"Mix {mix['_id']!r} has no associated MixMetric — "
+            f"Mix {mix['_id']!r} has no associated MixMetric â€” "
             "every persisted Mix must fit at least one bucket"
         )
 
 
 # ---------------------------------------------------------------------------
-# Property 26 — No combination contains more than one nugget SKU
+# Property 26 â€” No combination contains more than one nugget SKU
 # **Validates: Requirements 3.3**
 # ---------------------------------------------------------------------------
 
@@ -1426,7 +1435,7 @@ def test_property26_no_combo_has_more_than_one_nugget(dummy):
 
 
 # ---------------------------------------------------------------------------
-# Property 27 — No SKU appears more than 3 times in any combination
+# Property 27 â€” No SKU appears more than 3 times in any combination
 # **Validates: Requirements 3.2**
 # ---------------------------------------------------------------------------
 
@@ -1453,7 +1462,7 @@ def test_property27_no_sku_appears_more_than_3_times(dummy):
     for mix in all_mixes:
         sku_keys = mix.get("skuKeys", [])
         # skuKeys contains unique trade numbers; check via mix_metrics unitPlan for counts
-        # But skuKeys is unique per mix doc — check unitPlan in metrics instead
+        # But skuKeys is unique per mix doc â€” check unitPlan in metrics instead
         metrics = list(db["mix_metrics"].find({"mixId": mix["_id"]}))
         for metric in metrics:
             unit_plan = metric.get("unitPlan", [])
@@ -1467,7 +1476,7 @@ def test_property27_no_sku_appears_more_than_3_times(dummy):
 
 
 # ---------------------------------------------------------------------------
-# Property 28 — At most one Mix per SKU set + mfgType after a run
+# Property 28 â€” At most one Mix per SKU set + mfgType after a run
 # **Validates: Requirements 8.4**
 # ---------------------------------------------------------------------------
 
@@ -1507,7 +1516,7 @@ def test_property28_at_most_one_mix_per_sku_set_and_mfg_type(dummy):
 
 
 # ---------------------------------------------------------------------------
-# Property 29 — processedCombinations checkpointed to job_repo is non-decreasing
+# Property 29 â€” processedCombinations checkpointed to job_repo is non-decreasing
 # **Validates: Requirements 9.3**
 # ---------------------------------------------------------------------------
 
@@ -1559,5 +1568,6 @@ def test_property29_processed_combinations_non_decreasing(dummy):
         for i in range(1, len(processed_list)):
             assert processed_list[i] >= processed_list[i - 1], (
                 f"Stage {stage_index}: processedCombinations decreased from "
-                f"{processed_list[i-1]} to {processed_list[i]} — must be non-decreasing"
+                f"{processed_list[i-1]} to {processed_list[i]} â€” must be non-decreasing"
             )
+

@@ -8,3 +8,4 @@ settings.json
 /enumeration-api/__pycache__
 /enumeration-worker-api/.hypothesis/
 *.pyc
+/streamlit-app/.hypothesis/

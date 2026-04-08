@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -28,11 +29,26 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_mongodb_url(mongodb_url: str) -> str:
+    """
+    Return a MongoDB URL safe for logs by stripping any embedded credentials.
+    """
+    parts = urlsplit(mongodb_url)
+    if parts.username is None and parts.password is None:
+        return mongodb_url
+
+    hostname = parts.hostname or ""
+    if parts.port is not None:
+        hostname = f"{hostname}:{parts.port}"
+
+    return urlunsplit((parts.scheme, hostname, parts.path, parts.query, parts.fragment))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("Starting %s ...", settings.service_name)
-    logger.info("MongoDB: %s / %s", settings.mongodb_url, settings.mongodb_database)
+    logger.info("MongoDB: %s / %s", _sanitize_mongodb_url(settings.mongodb_url), settings.mongodb_database)
     yield
     logger.info("Shutting down %s ...", settings.service_name)
     close_mongo_connection()

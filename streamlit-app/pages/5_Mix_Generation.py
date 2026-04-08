@@ -51,6 +51,28 @@ def cancel_button_visible(status: str) -> bool:
     return status in {"pending", "running"}
 
 
+def _format_job_option_label(job: dict) -> str:
+    """Build a friendly dropdown label from runId and submitted date."""
+    run_id = job.get("runId") or "Unnamed job"
+    created_at = job.get("createdAt") or ""
+    submitted_date = created_at[:10] if isinstance(created_at, str) and created_at else "unknown date"
+    return f"{run_id} - submitted {submitted_date}"
+
+
+def _stage_label(stage_num: int | str) -> str:
+    """Translate a 1-4 stage number into a user-friendly combination label."""
+    labels = {
+        1: "single-SKU combinations",
+        2: "two-SKU combinations",
+        3: "three-SKU combinations",
+        4: "four-SKU combinations",
+    }
+    try:
+        return labels[int(stage_num)]
+    except (TypeError, ValueError, KeyError):
+        return "combination stage"
+
+
 # ---------------------------------------------------------------------------
 # Session-state helpers
 # ---------------------------------------------------------------------------
@@ -106,8 +128,9 @@ with st.form("job_submission_form"):
     plant_filter = st.text_input("plantFilter (optional)", placeholder="e.g. PLANT1")
     bird_size_filter = st.text_input("birdSizeFilter (optional)", placeholder="e.g. SB")
     max_combination_size = st.number_input(
-        "maxCombinationSize (1–4)", min_value=1, max_value=4, value=4, step=1
+        "Largest combination size to enumerate (1–4)", min_value=1, max_value=4, value=4, step=1
     )
+    st.caption("Stage 1 = single-SKU combos, Stage 2 = pairs, Stage 3 = triples, Stage 4 = quadruples.")
     batch_size = st.number_input(
         "batchSize (≥ 1)", min_value=1, value=1000, step=1
     )
@@ -185,8 +208,13 @@ else:
     st.dataframe(df, width="stretch", hide_index=True)
 
     # Job selection for detail view
-    job_ids = [j.get("jobId", "") for j in jobs]
-    selected_job_id = st.selectbox("Select a job to view details", options=[""] + job_ids)
+    job_options = {j.get("jobId", ""): j for j in jobs if j.get("jobId")}
+    job_ids = list(job_options.keys())
+    selected_job_id = st.selectbox(
+        "Select a job to view details",
+        options=[""] + job_ids,
+        format_func=lambda job_id: "Select a job..." if not job_id else _format_job_option_label(job_options[job_id]),
+    )
 
     if selected_job_id:
         try:
@@ -233,7 +261,10 @@ else:
                     processed = s.get("processedCombinations", 0)
                     total = s.get("totalCombinations", 0)
                     pct = int(processed / total * 100) if total > 0 else 0
-                    st.markdown(f"Stage {stage_num} ({stage_status}): {processed}/{total} combinations")
+                    st.markdown(
+                        f"Stage {stage_num} - {_stage_label(stage_num)} "
+                        f"({stage_status}): {processed}/{total} combinations"
+                    )
                     st.progress(pct / 100)
             else:
                 st.info("Job is running — no stage data yet.")

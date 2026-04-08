@@ -21,6 +21,12 @@ class MixMetric(BaseModel):
     value: float = Field(..., alias="value", ge=0.0, le=100.0, description="Percentage of total value represented by this bucket")
     trim_percentage: float = Field(..., alias="trimPercentage", ge=0.0, le=100.0, description="Percentage of parts trimmed in this bucket")
     unit_plan: List[UnitPlanItem] = Field(..., alias="unitPlan", description="Unit production plan for this bucket mix combo")
+    total_product_produced_grams: Optional[float] = Field(
+        None,
+        alias="totalProductProducedGrams",
+        ge=0.0,
+        description="Total mass of product produced by this mix in grams",
+    )
 
     # Optional denormalized array of SKU trade numbers present in the referenced mix.
     # Storing this here allows direct queries like { skuKeys: "123" } against the metrics
@@ -38,8 +44,31 @@ class MixMetric(BaseModel):
                 "upgradePercentage": 20.5,
                 "value": 1.3,
                 "trimPercentage": 5.2,
-                "unitPlan": [],
-                "skuKeys": ["123", "345", "567"],
+                "totalProductProducedGrams": 327.0,
+                "unitPlan": [
+                    {
+                        "sku": "45065",
+                        "partCode": "D",
+                        "unitsInPlan": 1,
+                        "totalWeightInPlan": 109.0,
+                        "pctOfTotal": 33.33,
+                    },
+                    {
+                        "sku": "45065",
+                        "partCode": "R",
+                        "unitsInPlan": 1,
+                        "totalWeightInPlan": 109.0,
+                        "pctOfTotal": 33.33,
+                    },
+                    {
+                        "sku": "45065",
+                        "partCode": "M",
+                        "unitsInPlan": 1,
+                        "totalWeightInPlan": 109.0,
+                        "pctOfTotal": 33.33,
+                    },
+                ],
+                "skuKeys": ["45065"],
             }
         },
     }
@@ -57,6 +86,22 @@ class MixMetric(BaseModel):
             # If provided, ensure it matches expected composite format
             if self.metric_id != composite:
                 raise ValueError("_id must equal '{mixId}:{bucketId}'")
+        return self
+
+    @model_validator(mode="after")
+    def populate_derived_fields(self):
+        """Populate derived percentages and the total produced grams value."""
+        total_product_grams = sum(item.total_weight_in_plan for item in self.unit_plan)
+
+        if total_product_grams > 0:
+            for item in self.unit_plan:
+                pct_of_total = round((item.total_weight_in_plan / total_product_grams) * 100.0, 2)
+                object.__setattr__(item, "pct_of_total", pct_of_total)
+        else:
+            for item in self.unit_plan:
+                object.__setattr__(item, "pct_of_total", 0.0)
+
+        self.total_product_produced_grams = float(total_product_grams)
         return self
 
     @model_validator(mode="after")

@@ -36,6 +36,7 @@ from enumeration_shared.repositories import (
 )
 
 logger = logging.getLogger(__name__)
+_STANDARD_NORMAL = NormalDist(mu=0.0, sigma=1.0)
 
 
 def _is_nugget_product(product_type: Optional[str]) -> bool:
@@ -61,9 +62,26 @@ def _bucket_target_weight(bucket: Dict[str, Any]) -> float:
     raise KeyError("bucket must include 'targetWeight' or 'minWeight'")
 
 
+def _bucket_max_weight(bucket: Dict[str, Any]) -> float:
+    """Return the bucket's maximum weight."""
+    if "maxWeight" in bucket:
+        return bucket["maxWeight"]
+    raise KeyError("bucket must include 'maxWeight'")
+
+
 def _combo_sku_keys(combo: List[Dict[str, Any]]) -> List[str]:
     """Return combo trade numbers in first-appearance order without duplicates."""
     return list(dict.fromkeys(str(s["tradeNumber"]) for s in combo))
+
+
+def _combo_signature_key(combo: List[Dict[str, Any]]) -> str:
+    """Return an occurrence-preserving key for a SKU combo."""
+    return "|".join(str(s["tradeNumber"]) for s in combo)
+
+
+def _combo_has_fillet(combo: List[Dict[str, Any]]) -> bool:
+    """Return True when the combo contains at least one non-nugget SKU."""
+    return any(not _is_nugget_product(s.get("productType")) for s in combo)
 
 
 def _assign_combo_part_codes(
@@ -129,6 +147,11 @@ def _build_combo_sku_map(combo: List[Dict[str, Any]], part_assignments: List[str
         if trade_number not in skus:
             skus[trade_number] = part_code
     return skus
+
+
+def _doc_without_id(document: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a shallow copy of a Mongo document without its `_id` field."""
+    return {key: value for key, value in document.items() if key != "_id"}
 
 # ---------------------------------------------------------------------------
 # Global Config API key constants
@@ -223,53 +246,15 @@ def _load_buckets(db: Database) -> List[Dict[str, Any]]:
 
 
 @lru_cache(maxsize=1024)
-def _mc_truncated_avg_pdf(
-    mu: float,
-    sigma: float,
-    lower_bound: float,
-    upper_bound: float,
-    n: int = UPGRADE_MONTE_CARLO_SAMPLES,
-    alpha: float = UPGRADE_CONFIDENCE_ALPHA,
-) -> tuple[float, float, float]:
-    """
-    Estimate the truncated-normal mean within a bucket and the implied trim.
+def calculate_bucket_mean(lb, ub, mu, sigma):
+    alpha = (lb - mu) / sigma
+    beta = (ub - mu) / sigma
+    denominator = _STANDARD_NORMAL.cdf(beta) - _STANDARD_NORMAL.cdf(alpha)
+    if denominator <= 1e-12:
+        return min(max(mu, lb), ub)
 
-    The implementation mirrors the requested Monte Carlo approach while using a
-    deterministic RNG seed so repeated enumeration runs are stable for the same
-    bucket/config inputs.
-
-    Returns:
-        Tuple of ``(mean_estimate, ci_half_width, expected_trim_fraction)``.
-    """
-    if sigma <= 0:
-        raise ValueError("sigma must be positive")
-    if upper_bound <= lower_bound:
-        raise ValueError("upper_bound must be greater than lower_bound")
-    if n <= 1:
-        raise ValueError("n must be greater than 1")
-
-    dist = NormalDist(mu=mu, sigma=sigma)
-    epsilon = 1e-12
-    cdf_lower = max(epsilon, min(1.0 - epsilon, dist.cdf(lower_bound)))
-    cdf_upper = max(epsilon, min(1.0 - epsilon, dist.cdf(upper_bound)))
-    if cdf_upper <= cdf_lower:
-        raise ValueError("bucket range has zero probability mass for the configured distribution")
-
-    seed = hash((round(mu, 8), round(sigma, 8), round(lower_bound, 8), round(upper_bound, 8), n))
-    rng = random.Random(seed)
-    samples = [
-        dist.inv_cdf(rng.uniform(cdf_lower, cdf_upper))
-        for _ in range(n)
-    ]
-
-    mean_est = sum(samples) / n
-    variance = sum((sample - mean_est) ** 2 for sample in samples) / (n - 1)
-    sample_std = variance ** 0.5
-    z = NormalDist().inv_cdf(1 - alpha / 2)
-    ci_half = z * sample_std / (n ** 0.5)
-    expected_trim = max(0.0, (mean_est - lower_bound) / mean_est) if mean_est > 0 else 0.0
-
-    return mean_est, ci_half, expected_trim
+    numerator = _STANDARD_NORMAL.pdf(alpha) - _STANDARD_NORMAL.pdf(beta)
+    return mu + sigma * (numerator / denominator)
 
 
 def _fetch_config_values(global_config_url: str) -> Dict[str, float]:
@@ -485,7 +470,7 @@ def _build_mix(
     req_bird_size = bird_size_filter if bird_size_filter is not None else combo[0]["birdSize"]
 
     # Fillet counts and weight (non-nugget SKUs)
-    non_nugget_skus = [s for s in combo if s.get("productType") != NUGGET_SKU_KEY]
+    non_nugget_skus = [s for s in combo if not _is_nugget_product(s.get("productType"))]
     num_fillets = len(non_nugget_skus)
     fillet_weight = sum(s["targetWeight"] for s in non_nugget_skus)
 
@@ -504,6 +489,7 @@ def _build_mix(
         "numFillets": num_fillets,
         "filletWeight": fillet_weight,
         "skuKeys": _combo_sku_keys(combo),
+        "skuSetKey": _combo_signature_key(combo),
     }
 
 
@@ -513,29 +499,27 @@ def _build_mix(
 
 def _fits_bucket(mix_weight: float, bucket: Dict, tolerance_pct: float) -> bool:
     """
-    Determine whether a mix weight falls within a bucket's effective weight range.
+    Determine whether a mix weight can be produced in a bucket.
 
-    Applies a tolerance percentage to the bucket's minimum weight, allowing mixes
-    that are slightly below ``bucket["minWeight"]`` to still qualify.
+    The bucket's ``targetWeight`` is the hard upper bound.
 
     Args:
         mix_weight: Total weight of the mix (sum of SKU targetWeights).
-        bucket: Bucket document with ``minWeight`` and ``maxWeight`` fields.
-        tolerance_pct: Tolerance percentage (0–100) subtracted from ``minWeight``.
-            E.g. ``5.0`` means the effective minimum is 5% below ``bucket["minWeight"]``.
+        bucket: Bucket document with ``minWeight``, ``targetWeight``, and
+            ``maxWeight`` fields.
+        tolerance_pct: Retained for compatibility with existing callers.
 
     Returns:
-        ``True`` when ``effective_min <= mix_weight <= bucket["maxWeight"]``,
+        ``True`` when ``mix_weight <= bucket["maxWeight"]``,
         ``False`` otherwise.
     """
-    effective_min = _bucket_min_weight(bucket) * (1 - tolerance_pct / 100)
-    return effective_min <= mix_weight <= bucket["maxWeight"]
-
+    return mix_weight <= _bucket_target_weight(bucket) * (1.0 - tolerance_pct)
 
 def _planned_bucket_weight(
     combo: List[Dict],
     bucket: Dict,
     includes_nug: bool,
+    config_values: Dict[str, float],
     nugget_target_weight: Optional[float],
 ) -> float:
     """
@@ -545,25 +529,33 @@ def _planned_bucket_weight(
     ``unitPlan``. Otherwise a combo can appear to fit by raw target-weight sum
     while the persisted plan materially exceeds the bucket bounds.
     """
-    min_weight = _bucket_min_weight(bucket)
-    planned_weight = 0.0
+    bucket_target_weight = _bucket_target_weight(bucket) * (1.0 - config_values.get("tolerance_pct", 0.0))
+    fixed_weight = 0.0
+    nugget_weight = 0.0
 
     for sku in combo:
         target_weight = sku["targetWeight"]
         units_per_cut = sku.get("unitsPerCut", 1)
-
-        if (
+        is_nugget = (
             includes_nug
             and _is_nugget_product(sku.get("productType"))
             and nugget_target_weight is not None
             and nugget_target_weight > 0
-        ):
-            units_in_plan = floor(min_weight / nugget_target_weight)
-            planned_weight += units_in_plan * nugget_target_weight
-        else:
-            planned_weight += units_per_cut * target_weight
+        )
 
-    return planned_weight
+        if is_nugget:
+            continue
+
+        fixed_weight += units_per_cut * target_weight
+
+    if includes_nug and nugget_target_weight is not None and nugget_target_weight > 0 and fixed_weight <= 0.0:
+        raise ValueError("Nugget-only mixes are not allowed")
+
+    if includes_nug and nugget_target_weight is not None and nugget_target_weight > 0:
+        remaining_weight = max(0.0, bucket_target_weight - fixed_weight)
+        nugget_weight = floor(remaining_weight / nugget_target_weight) * nugget_target_weight
+
+    return fixed_weight + nugget_weight
 
 
 # ---------------------------------------------------------------------------
@@ -593,17 +585,17 @@ def _compute_mix_metric(
       ``[bucket.minWeight, bucket.maxWeight]`` and computed as
       ``(1 - expected_trim) * 100``. Otherwise it falls back to the legacy
       ``(mix_weight / bucket.targetWeight) * 100`` formula, capped at 100.
-    - ``trimPercentage``: ``((mix_weight - bucket.minWeight) / mix_weight) * 100``
-      when ``mix_weight > bucket.minWeight``, otherwise ``0.0``.
+    - ``trimPercentage``: ``100.0 - upgradePercentage``.
     - ``value``: ``fds_weight * fds_value + rtl_weight * rtl_value + trim_weight * trim_value``
       where ``trim_weight = max(0.0, mix_weight - bucket.minWeight)``.
 
     **Unit Plan construction**: one item per SKU entry in the combo (including
     repeated SKUs).  When ``includes_nug`` is ``True`` and
     ``nugget_target_weight > 0``, the nugget SKU's ``unitsInPlan`` is overridden
-    to ``floor(bucket.minWeight / nugget_target_weight)`` and
-    ``totalWeightInPlan`` is updated accordingly.  All non-nugget SKUs retain
-    ``unitsInPlan = unitsPerCut``.
+    to consume the remaining bucket capacity after all non-nugget cuts have
+    been fixed: ``floor((bucket.targetWeight - fixed_non_nugget_weight) /
+    nugget_target_weight)``.  All non-nugget SKUs retain ``unitsInPlan =
+    unitsPerCut``.
 
     ``skuKeys`` is the list of ``tradeNumber`` values in first-appearance order
     matching ``unitPlan``.
@@ -625,51 +617,26 @@ def _compute_mix_metric(
     Returns:
         Dict representing the MixMetric document.
     """
-    mix_weight = sum(s["targetWeight"] for s in combo)
-    min_weight = _bucket_min_weight(bucket)
-    target_weight = _bucket_target_weight(bucket)
-
-    # --- upgradePercentage ---
-    upgrade_mu = config_values.get("upgrade_mu", 0.0)
-    upgrade_sigma = config_values.get("upgrade_sigma", 0.0)
-    max_weight = bucket["maxWeight"]
-
-    if upgrade_mu > 0 and upgrade_sigma > 0 and max_weight > min_weight:
-        try:
-            _, _, expected_trim = _mc_truncated_avg_pdf(
-                mu=upgrade_mu,
-                sigma=upgrade_sigma,
-                lower_bound=min_weight,
-                upper_bound=max_weight,
-            )
-            upgrade_percentage = max(0.0, min(100.0, (1.0 - expected_trim) * 100.0))
-        except ValueError:
-            if target_weight > 0:
-                upgrade_percentage = min(100.0, (mix_weight / target_weight) * 100)
-            else:
-                upgrade_percentage = 0.0
-    elif target_weight > 0:
-        upgrade_percentage = min(100.0, (mix_weight / target_weight) * 100)
-    else:
-        upgrade_percentage = 0.0
-
-    # --- trimPercentage ---
-    trim_percentage = 1.0 - upgrade_percentage
-
-    # --- value ---
-    fds_weight = sum(s["targetWeight"] for s in combo if s.get("customerType") == "FDS")
-    rtl_weight = sum(s["targetWeight"] for s in combo if s.get("customerType") == "RTL")
-    # -- YOU CAN ADD ADDITIONAL CUSTOMER TYPES HERE
-    trim_weight = max(0.0, mix_weight - min_weight)
-    value = (
-        fds_weight * config_values.get("fds_value", 0.0)
-        + rtl_weight * config_values.get("rtl_value", 0.0)
-        + trim_weight * config_values.get("trim_value", 0.0)
-    )
-
     # --- unitPlan ---
+    global trim_weight
     unit_plan: List[Dict] = []
     seen_trade_numbers: List[str] = []
+    planned_mix_weight = 0.0
+    planned_fds_weight = 0.0
+    planned_rtl_weight = 0.0
+    fixed_non_nugget_weight = sum(
+        sku.get("unitsPerCut", 1) * sku["targetWeight"]
+        for sku in combo
+        if not (
+            includes_nug
+            and _is_nugget_product(sku.get("productType"))
+            and nugget_target_weight is not None
+            and nugget_target_weight > 0
+        )
+    )
+    if includes_nug and nugget_target_weight is not None and nugget_target_weight > 0 and fixed_non_nugget_weight <= 0.0:
+        raise ValueError("Nugget-only mixes are not allowed")
+    remaining_nugget_weight = max(0.0, _bucket_target_weight(bucket) - fixed_non_nugget_weight)
 
     if part_assignments is None:
         part_assignments = [skus_map.get(str(sku["tradeNumber"]), "") for sku in combo]
@@ -685,7 +652,7 @@ def _compute_mix_metric(
             and nugget_target_weight is not None
             and nugget_target_weight > 0
         ):
-            units_in_plan = floor(min_weight / nugget_target_weight)
+            units_in_plan = floor(remaining_nugget_weight / nugget_target_weight)
             total_weight_in_plan = units_in_plan * nugget_target_weight
         else:
             units_in_plan = units_per_cut
@@ -697,11 +664,61 @@ def _compute_mix_metric(
             "unitsInPlan": units_in_plan,
             "totalWeightInPlan": total_weight_in_plan,
         })
+        planned_mix_weight += total_weight_in_plan
+        if sku.get("customerType") == "FDS":
+            planned_fds_weight += total_weight_in_plan
+        elif sku.get("customerType") == "RTL":
+            planned_rtl_weight += total_weight_in_plan
 
         if trade_number not in seen_trade_numbers:
             seen_trade_numbers.append(trade_number)
 
     sku_keys = seen_trade_numbers
+    total_product_produced_grams = float(planned_mix_weight)
+    if total_product_produced_grams > 0:
+        for item in unit_plan:
+            item["pctOfTotal"] = round((item["totalWeightInPlan"] / total_product_produced_grams) * 100.0, 2)
+    else:
+        for item in unit_plan:
+            item["pctOfTotal"] = 0.0
+
+    min_weight = _bucket_min_weight(bucket)
+    target_weight = _bucket_target_weight(bucket) * (1.0 - config_values.get("tolerance_pct", 0.0))
+    upgrade_mu = config_values.get("upgrade_mu", 0.0)
+    upgrade_sigma = config_values.get("upgrade_sigma", 0.0)
+    max_weight = bucket["maxWeight"]
+
+    # --- upgradePercentage ---
+    if upgrade_mu > 0 and upgrade_sigma > 0 and max_weight > min_weight:
+        try:
+            bucket_mean = calculate_bucket_mean(
+                lb=min_weight,
+                ub=max_weight,
+                mu=upgrade_mu,
+                sigma=upgrade_sigma,
+            )
+
+            upgrade_percentage = (total_product_produced_grams / bucket_mean) * 100.0
+            trim_weight = max(0.0, total_product_produced_grams - bucket_mean)
+
+        except ValueError:
+            if target_weight > 0:
+                upgrade_percentage = total_product_produced_grams / target_weight
+            else:
+                upgrade_percentage = 0.0
+    else:
+        upgrade_percentage = total_product_produced_grams / target_weight
+        trim_weight = max(0.0, total_product_produced_grams - target_weight)
+
+    # --- trimPercentage ---
+    trim_percentage = 100.0 - upgrade_percentage
+
+    # --- value ---
+    value = (
+        planned_fds_weight * config_values.get("fds_value", 0.0)
+        + planned_rtl_weight * config_values.get("rtl_value", 0.0)
+        + trim_weight * config_values.get("trim_value", 0.0)
+    )
 
     return {
         "_id": f"{mix_id}:{bucket['_id']}",
@@ -711,6 +728,7 @@ def _compute_mix_metric(
         "value": value,
         "trimPercentage": trim_percentage,
         "unitPlan": unit_plan,
+        "totalProductProducedGrams": total_product_produced_grams,
         "skuKeys": sku_keys,
     }
 
@@ -749,8 +767,9 @@ def _upsert_mix(mix_repo: MixRepository, mix_doc: Dict[str, Any]) -> str:
     if existing:
         existing_doc = existing[0]
         mix_id = existing_doc["_id"]
-        mix_doc["_id"] = mix_id
-        mix_repo.update(mix_id, mix_doc)
+        if _doc_without_id(existing_doc) != _doc_without_id(mix_doc):
+            mix_doc["_id"] = mix_id
+            mix_repo.update(mix_id, mix_doc)
         return mix_id
     else:
         created = mix_repo.create(mix_doc)
@@ -775,7 +794,9 @@ def _upsert_mix_metric(metric_repo: MixMetricRepository, metric_doc: Dict[str, A
     try:
         metric_repo.create(metric_doc)
     except DuplicateKeyError:
-        metric_repo.update(metric_doc["_id"], metric_doc)
+        existing_doc = metric_repo.get_by_id(metric_doc["_id"])
+        if existing_doc is None or _doc_without_id(existing_doc) != _doc_without_id(metric_doc):
+            metric_repo.update(metric_doc["_id"], metric_doc)
 
 
 # ---------------------------------------------------------------------------
@@ -864,25 +885,21 @@ def run_enumeration(
             if i % batch_size == 0 and job_repo.is_cancelled(job_id):
                 return
 
+            # Require every persisted mix to include at least one fillet SKU.
+            if not _combo_has_fillet(combo):
+                continue
+
             valid_strategies = _get_valid_cut_strategies(combo, cut_strategies)
 
             for strategy in valid_strategies:
                 mix_doc = _build_mix(combo, strategy, plant_filter, bird_size_filter)
                 part_assignments = mix_doc.pop("_partAssignments", None)
+                mix_weight = sum(s["targetWeight"] for s in combo)
 
-                # Build skuSetKey before upsert
-                mix_doc["skuSetKey"] = "|".join(sorted(mix_doc.get("skuKeys", mix_doc["skus"].keys())))
-
-                # Check bucket fit and compute metrics
+                # Check bucket capacity and compute metrics.
                 fitting_metrics = []
                 for bucket in buckets:
-                    planned_weight = _planned_bucket_weight(
-                        combo,
-                        bucket,
-                        mix_doc["includesNug"],
-                        mix_doc.get("nuggetTargetWeight"),
-                    )
-                    if _fits_bucket(planned_weight, bucket, config_values["tolerance_pct"]):
+                    if _fits_bucket(mix_weight, bucket, config_values["tolerance_pct"]):
                         metric = _compute_mix_metric(
                             None,
                             combo,
@@ -895,7 +912,7 @@ def run_enumeration(
                         )
                         fitting_metrics.append(metric)
 
-                # Only persist if at least one bucket fits
+                # Only persist if at least one bucket can accommodate the mix.
                 if fitting_metrics:
                     mix_id = _upsert_mix(mix_repo, mix_doc)
                     for metric_doc in fitting_metrics:

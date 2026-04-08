@@ -56,6 +56,7 @@ def test_create_line_rejects_invalid_cut_strategy_ids():
         friendlyName="DSI 884",
         lineType="DSI884",
         plant="FSP",
+        hoursOfLaborAvailablePerShift=8.0,
         permittedCutStrategyIds=["strategy-3"],
         isActive=True,
     )
@@ -85,6 +86,7 @@ def test_create_and_list_active_lines():
             friendlyName="DSI 884",
             lineType="DSI884",
             plant="FSP",
+            hoursOfLaborAvailablePerShift=8.0,
             permittedCutStrategyIds=["strategy-1"],
             isActive=True,
         )
@@ -95,6 +97,7 @@ def test_create_and_list_active_lines():
             friendlyName="DB20 Main",
             lineType="DB20",
             plant="FSP",
+            hoursOfLaborAvailablePerShift=10.0,
             permittedCutStrategyIds=["strategy-2"],
             isActive=False,
         )
@@ -124,6 +127,7 @@ def test_update_line_preserves_created_at():
             friendlyName="DSI 884",
             lineType="DSI884",
             plant="FSP",
+            hoursOfLaborAvailablePerShift=8.0,
             permittedCutStrategyIds=["strategy-1"],
             isActive=True,
         )
@@ -135,6 +139,7 @@ def test_update_line_preserves_created_at():
             friendlyName="DSI 884 Updated",
             lineType="DSI884",
             plant="FSP",
+            hoursOfLaborAvailablePerShift=9.5,
             permittedCutStrategyIds=["strategy-1", "strategy-2"],
             isActive=False,
         ),
@@ -144,6 +149,7 @@ def test_update_line_preserves_created_at():
     assert updated.created_at == created.created_at
     assert updated.updated_at >= created.updated_at
     assert updated.is_active is False
+    assert updated.hours_of_labor_available_per_shift == 9.5
 
 
 def test_create_line_rejects_cut_strategies_from_other_line_type():
@@ -162,6 +168,7 @@ def test_create_line_rejects_cut_strategies_from_other_line_type():
         friendlyName="DSI 884 Line 1",
         lineType="DSI884",
         plant="FSP",
+        hoursOfLaborAvailablePerShift=8.0,
         permittedCutStrategyIds=["strategy-2"],
         isActive=True,
     )
@@ -179,6 +186,7 @@ def test_list_lines_accepts_legacy_document_without_line_type_when_line_id_is_kn
         "lineId": "DSI884",
         "friendlyName": "Legacy DSI 884",
         "plant": "FSP",
+        "hoursOfLaborAvailablePerShift": 8.0,
         "permittedCutStrategyIds": [],
         "isActive": True,
         "createdAt": "2026-04-06T00:00:00Z",

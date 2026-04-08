@@ -21,6 +21,11 @@ class LineBase(BaseModel):
     friendly_name: str = Field(..., alias="friendlyName", min_length=1, max_length=100)
     line_type: LineType = Field(..., alias="lineType")
     plant: str = Field(..., alias="plant", min_length=1, max_length=100)
+    hours_of_labor_available_per_shift: float = Field(
+        ...,
+        alias="hoursOfLaborAvailablePerShift",
+        gt=0,
+    )
     permitted_cut_strategy_ids: List[str] = Field(
         default_factory=list,
         alias="permittedCutStrategyIds",

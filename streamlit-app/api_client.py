@@ -153,6 +153,15 @@ def search_mixes(criteria: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Mix Metrics  (Enumeration API)
+# ---------------------------------------------------------------------------
+
+def search_mix_metrics(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{ENUMERATION_API_URL}/metrics/search", json=criteria)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
 # Jobs  (Worker API)
 # ---------------------------------------------------------------------------
 

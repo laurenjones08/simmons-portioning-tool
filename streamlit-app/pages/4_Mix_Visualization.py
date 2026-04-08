@@ -13,7 +13,7 @@ import pandas as pd
 # Allow importing api_client from the parent directory when running as a page
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from api_client import APIError, search_mixes, search_cut_strategies
+from api_client import APIError, search_mixes, search_cut_strategies, search_mix_metrics
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -53,6 +53,14 @@ def _load_cut_strategies() -> None:
     except APIError as e:
         _handle_api_error(e)
         st.session_state.mix_cut_strategies = []
+
+
+def _load_mix_metrics(mix_id: str) -> list[dict]:
+    try:
+        return search_mix_metrics({"mixId": mix_id})
+    except APIError as e:
+        _handle_api_error(e)
+        return []
 
 
 def _format_cut_strategy_label(strategy: dict) -> str:
@@ -239,3 +247,48 @@ else:
                     st.dataframe(skus_df, width="stretch", hide_index=True)
                 else:
                     st.write("No SKUs")
+
+        st.subheader("Mix Metrics")
+        metrics = _load_mix_metrics(selected_mix_id)
+
+        if not metrics:
+            st.info("No mix metrics found for this mix.")
+        else:
+            metrics_rows = []
+            for metric in metrics:
+                metrics_rows.append({
+                    "Metric ID": metric.get("_id", ""),
+                    "Bucket ID": metric.get("bucketId", ""),
+                    "Upgrade %": metric.get("upgradePercentage"),
+                    "Value": metric.get("value"),
+                    "Trim %": metric.get("trimPercentage"),
+                    "Total Product Produced (g)": metric.get("totalProductProducedGrams"),
+                })
+
+            st.dataframe(pd.DataFrame(metrics_rows), width="stretch", hide_index=True)
+
+            metric_ids = [metric.get("_id", "") for metric in metrics if metric.get("_id")]
+            selected_metric_id = st.selectbox(
+                "Select a metric to view unit plan detail",
+                options=metric_ids,
+            )
+            selected_metric = next(
+                (metric for metric in metrics if metric.get("_id") == selected_metric_id),
+                None,
+            )
+
+            if selected_metric:
+                unit_plan = selected_metric.get("unitPlan", [])
+                if unit_plan:
+                    unit_plan_rows = [
+                        {
+                            "SKU": item.get("sku", ""),
+                            "Part Code": item.get("partCode", ""),
+                            "Units In Plan": item.get("unitsInPlan"),
+                            "Total Weight In Plan (g)": item.get("totalWeightInPlan"),
+                            "Pct Of Total": item.get("pctOfTotal"),
+                        }
+                        for item in unit_plan
+                    ]
+                    st.markdown("**Unit Plan Detail**")
+                    st.dataframe(pd.DataFrame(unit_plan_rows), width="stretch", hide_index=True)
