@@ -1,0 +1,28 @@
+# FastAPI - Modern web framework for building APIs
+fastapi==0.109.0
+
+# Uvicorn - ASGI server for running FastAPI applications
+uvicorn[standard]==0.27.0
+
+# PyMongo - MongoDB driver for Python
+pymongo==4.6.1
+
+# Pydantic - Data validation using Python type annotations
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Python-dotenv - Load environment variables from .env files
+python-dotenv==1.0.0
+
+# Mongomock - MongoDB mocking for tests
+mongomock==4.1.2
+
+# Pytest - Testing framework
+pytest==7.4.4
+
+# HTTPX - Required by starlette.testclient for API integration tests
+httpx==0.26.0
+
+# Requests - HTTP library for calling external services (e.g. Global Config API)
+requests==2.31.0
+

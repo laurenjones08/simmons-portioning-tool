@@ -1,0 +1,47 @@
+name: Enumeration API Tests
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "enumeration-api/**"
+      - ".github/workflows/enumeration-tests.yml"
+  pull_request:
+    paths:
+      - "enumeration-api/**"
+      - ".github/workflows/enumeration-tests.yml"
+
+jobs:
+  test-enumeration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: enumeration-api
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: enumeration-api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run fast tests (commit gate)
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -vv --durations=10 \
+            test_router_integration.py \
+            models/test_mix_properties.py \
+            services/test_mix_service_uniqueness.py

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enumeration-shared"
+version = "0.1.0"
+description = "Shared MongoDB repository classes for enumeration services"
+requires-python = ">=3.11"
+dependencies = [
+    "pymongo>=4.6.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["enumeration_shared*"]

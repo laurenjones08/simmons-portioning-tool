@@ -1,0 +1,13 @@
+name: Microservices Tests (Legacy)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  legacy-note:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice
+        run: |
+          echo "This workflow is deprecated."
+          echo "Use enumeration-tests.yml, global-config-tests.yml, and stack-integration.yml."

@@ -1,0 +1,85 @@
+site_name: Simmons Portioning Tool
+site_description: Complete documentation for the Simmons Portioning Tool microservices stack
+docs_dir: source
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+  palette:
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - offline
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick Start: getting-started/quick-start.md
+    - Installation: getting-started/installation.md
+    - Running the Stack: getting-started/running-the-stack.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Microservices: architecture/microservices.md
+    - Database Design: architecture/database-design.md
+    - API Gateway: architecture/api-gateway.md
+  - Features:
+    - Overview: features/index.md
+    - Enumeration System:
+      - Overview: features/enumeration/overview.md
+      - SKU Management: features/enumeration/sku-management.md
+      - Search & Filtering: features/enumeration/search-filtering.md
+    - Mix Management:
+      - Overview: features/mix/overview.md
+      - MIX Model: features/mix/mix-model.md
+      - Configuration: features/mix/configuration.md
+      - Uniqueness Rules: features/mix/uniqueness-rules.md
+    - Global Configuration: features/global-config.md
+  - API Documentation:
+    - Overview: api/index.md
+    - Enumeration API:
+      - Overview: api/enumeration/overview.md
+      - SKU Endpoints: api/enumeration/sku-endpoints.md
+      - MIX Endpoints: api/enumeration/mix-endpoints.md
+      - Interactive Docs: api/enumeration/interactive-docs.md
+    - Global Config API:
+      - Overview: api/config/overview.md
+      - Configuration Endpoints: api/config/endpoints.md
+      - Interactive Docs: api/config/interactive-docs.md
+  - Database:
+    - Quick Start: database/quick-start.md
+    - Reinitialization: database/reinitialization.md
+    - Schema Overview: database/schema.md
+    - Indexes: database/indexes.md
+  - Operations:
+    - Docker Setup: operations/docker-setup.md
+    - Database Management: operations/database-management.md
+    - Monitoring: operations/monitoring.md
+    - Troubleshooting: operations/troubleshooting.md
+  - Development:
+    - Adding New Microservices: development/adding-microservices.md
+    - Testing: development/testing.md
+    - Contributing: development/contributing.md
+  - Specifications:
+    - Enumeration Services: specifications/enumeration-services.md
+    - System Design: specifications/system-design.md
+    - Technical Requirements: specifications/requirements.md
+
+
+

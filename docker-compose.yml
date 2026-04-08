@@ -1,0 +1,279 @@
+# Docker Compose configuration for microservices architecture
+# This file orchestrates MongoDB, Enumeration API, Global Config API, and Jaeger services
+
+services:
+  # MongoDB Database Service
+  # Provides persistent storage for both API services
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: always
+    
+    # Environment variables for MongoDB authentication
+    # MONGO_INITDB_ROOT_USERNAME: Admin username for MongoDB
+    # MONGO_INITDB_ROOT_PASSWORD: Admin password for MongoDB
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    
+    # Port mapping: host:container
+    # Exposes MongoDB on port 27017 for external access
+    ports:
+      - "27017:27017"
+    
+    # Named volume for data persistence
+    # Data survives container restarts and removals
+    # Initialization script for bootstrapping databases and collections
+    volumes:
+      - mongo_data:/data/db
+      - ./mongodb-init/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+
+    # Connect to custom network for service communication
+    networks:
+      - mongo_net
+    
+    # Health check to ensure MongoDB is ready
+    # Tests connection every 10 seconds with 5 second timeout
+    healthcheck:
+      test: ["CMD", "mongosh", "localhost:27017/test", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Enumeration API Service
+  # Manages SKU data with search and retrieval capabilities
+  enumeration-api:
+    build:
+      # Build context is the repo root so Dockerfile can COPY ../enumeration-shared
+      context: .
+      dockerfile: enumeration-api/Dockerfile
+    
+    container_name: enumeration-api
+    restart: always
+    
+    # Environment variables for service configuration
+    # These override values in .env file if present
+    environment:
+      # MongoDB connection string
+      # Uses service name 'mongodb' for DNS resolution within Docker network
+      MONGODB_URL: mongodb://root:example@mongodb:27017
+      MONGODB_DATABASE: enumeration_db
+      SERVICE_NAME: enumeration-api
+      # Jaeger configuration for distributed tracing
+      JAEGER_AGENT_HOST: jaeger
+      JAEGER_AGENT_PORT: 6831
+      ROOT_PATH: /api/enumeration
+
+    # Internal port only (reachable by gateway and other services on the Docker network)
+    expose:
+      - "8000"
+
+    # Mount source code for hot-reload during development
+    # Changes to code are reflected without rebuilding container
+    volumes:
+      - ./enumeration-api:/app
+      - ./enumeration-shared:/shared
+    networks:
+      - mongo_net
+    
+    # Wait for MongoDB to be healthy before starting
+    # Prevents connection errors on startup
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  # Global Config API Service
+  # Manages system-wide configuration key-value pairs
+  global-config-api:
+    build:
+      # Build context is the global-config-api directory
+      context: ./global-config-api
+      # Use the Dockerfile in that directory
+      dockerfile: Dockerfile
+    
+    container_name: global-config-api
+    restart: always
+    
+    # Environment variables for service configuration
+    environment:
+      # MongoDB connection string
+      # Uses service name 'mongodb' for DNS resolution within Docker network
+      MONGODB_URL: mongodb://root:example@mongodb:27017
+      MONGODB_DATABASE: config_db
+      SERVICE_NAME: global-config-api
+      # Jaeger configuration for distributed tracing
+      JAEGER_AGENT_HOST: jaeger
+      JAEGER_AGENT_PORT: 6831
+      ROOT_PATH: /api/config
+
+    # Internal port only (reachable by gateway and other services on the Docker network)
+    expose:
+      - "8001"
+
+    # Mount source code for hot-reload during development
+    volumes:
+      - ./global-config-api:/app
+    
+    # Connect to custom network
+    networks:
+      - mongo_net
+    
+    # Wait for MongoDB to be healthy before starting
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  # Unified API Gateway Service
+  # Front-door for frontend clients; routes requests to internal microservices
+  api-gateway:
+    image: nginx:1.27-alpine
+    container_name: api-gateway
+    restart: always
+
+    ports:
+      - "8080:80"
+
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      enumeration-api:
+        condition: service_started
+      global-config-api:
+        condition: service_started
+      enumeration-worker-api:
+        condition: service_started
+
+  # Documentation Service (MkDocs)
+  docs:
+    build:
+      context: ./docs
+      dockerfile: Dockerfile
+
+    container_name: docs
+    restart: always
+
+    ports:
+      - "3000:8000"
+
+    volumes:
+      - ./docs/mkdocs.yml:/docs/mkdocs.yml:ro
+      - ./docs/source:/docs/source:ro
+
+    networks:
+      - mongo_net
+
+  # Jaeger Service
+  # Distributed tracing backend for observability
+  # Collects and visualizes traces from both API services
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    container_name: jaeger
+    restart: always
+    
+    # Port mappings for Jaeger components:
+    # 5775: UDP agent (deprecated)
+    # 6831: UDP agent (compact thrift protocol)
+    # 6832: UDP agent (binary thrift protocol)
+    # 5778: HTTP serve configs
+    # 16686: Jaeger UI (web interface)
+    # 14268: HTTP collector
+    # 14250: gRPC collector
+    # 9411: Zipkin compatible endpoint
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    
+    # Environment variables for Jaeger configuration
+    environment:
+      # Use in-memory storage (not for production)
+      COLLECTOR_ZIPKIN_HOST_PORT: :9411
+    
+    # Connect to custom network
+    networks:
+      - mongo_net
+
+  # Streamlit Frontend
+  streamlit-app:
+    build:
+      context: ./streamlit-app
+      dockerfile: Dockerfile
+
+    container_name: streamlit-app
+    restart: always
+
+    ports:
+      - "8501:8501"
+
+    volumes:
+      - ./streamlit-app:/app
+
+    environment:
+      ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
+      WORKER_API_URL: http://api-gateway:80/api/enumeration-worker
+      CONFIG_API_URL: http://api-gateway:80/api/config
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      api-gateway:
+        condition: service_started
+
+  # Enumeration Worker API Service
+  # Dedicated microservice for submitting and monitoring long-running enumeration jobs.
+  # Exposes a REST API (POST /jobs, GET /jobs/{id}, POST /jobs/{id}/cancel).
+  # Runs the enumeration in a background thread and writes results + job status to MongoDB.
+  enumeration-worker-api:
+    build:
+      # Build context is the repo root so Dockerfile can COPY ../enumeration-shared
+      context: .
+      dockerfile: enumeration-worker-api/Dockerfile
+
+    container_name: enumeration-worker-api
+    restart: always
+
+    environment:
+      MONGODB_URL: mongodb://root:example@mongodb:27017
+      MONGODB_DATABASE: enumeration_db
+      SERVICE_NAME: enumeration-worker-api
+      ROOT_PATH: /api/enumeration-worker
+
+    expose:
+      - "8002"
+
+    volumes:
+      - ./enumeration-worker-api:/app
+      - ./enumeration-shared:/shared
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+# Named volumes for data persistence
+# Volumes persist data even when containers are removed
+volumes:
+  mongo_data:
+    driver: local
+
+# Custom network for service communication
+# Services on the same network can communicate using service names as hostnames
+networks:
+  mongo_net:
+    driver: bridge
