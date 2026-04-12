@@ -1,5 +1,5 @@
 # Docker Compose configuration for microservices architecture
-# This file orchestrates MongoDB, Enumeration API, Global Config API, and Jaeger services
+# This file orchestrates MongoDB, Enumeration API, Scheduling API, Scheduling Worker API, Global Config API, and Jaeger services
 
 services:
   # MongoDB Database Service
@@ -84,6 +84,71 @@ services:
       jaeger:
         condition: service_started
 
+  # Scheduling API Service
+  # Stores demand, decisions, outputs, and bucket usage records for the scheduling workflow
+  scheduling-api:
+    build:
+      context: .
+      dockerfile: scheduling-api/Dockerfile
+
+    container_name: scheduling-api
+    restart: always
+
+    environment:
+      MONGODB_URL: mongodb://root:example@mongodb:27017
+      MONGODB_DATABASE: scheduling_db
+      SERVICE_NAME: scheduling-api
+      JAEGER_AGENT_HOST: jaeger
+      JAEGER_AGENT_PORT: 6831
+      ROOT_PATH: /api/scheduling
+
+    expose:
+      - "8003"
+
+    volumes:
+      - ./scheduling-api:/app
+      - ./scheduling-shared:/shared
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  # Scheduling Worker API Service
+  # Runs the scheduling optimization pipeline in a background job and stores serialized results.
+  scheduling-worker-api:
+    build:
+      context: .
+      dockerfile: scheduling-worker-api/Dockerfile
+
+    container_name: scheduling-worker-api
+    restart: always
+
+    environment:
+      MONGODB_URL: mongodb://root:example@mongodb:27017
+      MONGODB_DATABASE: scheduling_db
+      SERVICE_NAME: scheduling-worker-api
+      ROOT_PATH: /api/scheduling-worker
+
+    expose:
+      - "8004"
+
+    volumes:
+      - ./scheduling-worker-api:/app
+      - ./scheduling:/app/scheduling
+      - ./scheduling-shared:/shared
+
+    networks:
+      - mongo_net
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
   # Global Config API Service
   # Manages system-wide configuration key-value pairs
   global-config-api:
@@ -145,6 +210,10 @@ services:
 
     depends_on:
       enumeration-api:
+        condition: service_started
+      scheduling-api:
+        condition: service_started
+      scheduling-worker-api:
         condition: service_started
       global-config-api:
         condition: service_started
@@ -223,6 +292,8 @@ services:
 
     environment:
       ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
+      SCHEDULING_API_URL: http://api-gateway:80/api/scheduling
+      SCHEDULING_WORKER_API_URL: http://api-gateway:80/api/scheduling-worker
       WORKER_API_URL: http://api-gateway:80/api/enumeration-worker
       CONFIG_API_URL: http://api-gateway:80/api/config
 

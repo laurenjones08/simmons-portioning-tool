@@ -221,10 +221,61 @@ print('  ✓ Sample SKU data inserted');
 print('\n✓ Enumeration database setup complete!');
 
 // ============================================================================
+// SCHEDULING DATABASE SETUP
+// ============================================================================
+
+print('\n[2/3] Creating scheduling_db database...');
+
+db = db.getSiblingDB('scheduling_db');
+
+print('  ✓ Database "scheduling_db" created/selected');
+
+print('\n  Creating "sku_demands" collection...');
+db.createCollection('sku_demands');
+print('  ✓ Collection "sku_demands" created');
+print('\n  Creating indexes for "sku_demands" collection...');
+db.sku_demands.createIndex({ "skuId": 1, "demandType": 1, "dueDate": 1 }, { name: "uniq_sku_demand_key", unique: true, background: true });
+db.sku_demands.createIndex({ "skuId": 1 }, { name: "idx_sku_demand_sku_id", background: true });
+db.sku_demands.createIndex({ "demandType": 1 }, { name: "idx_sku_demand_type", background: true });
+db.sku_demands.createIndex({ "dueDate": 1 }, { name: "idx_sku_demand_due_date", background: true });
+print('    ✓ Indexes created for "sku_demands"');
+
+print('\n  Creating "scheduling_decisions" collection...');
+db.createCollection('scheduling_decisions');
+print('  ✓ Collection "scheduling_decisions" created');
+print('\n  Creating indexes for "scheduling_decisions" collection...');
+db.scheduling_decisions.createIndex({ "mixId": 1, "lineId": 1, "date": 1 }, { name: "uniq_mix_line_date", unique: true, background: true });
+db.scheduling_decisions.createIndex({ "mixId": 1 }, { name: "idx_scheduling_decision_mix_id", background: true });
+db.scheduling_decisions.createIndex({ "lineId": 1 }, { name: "idx_scheduling_decision_line_id", background: true });
+db.scheduling_decisions.createIndex({ "date": 1 }, { name: "idx_scheduling_decision_date", background: true });
+print('    ✓ Indexes created for "scheduling_decisions"');
+
+print('\n  Creating "scheduling_outputs" collection...');
+db.createCollection('scheduling_outputs');
+print('  ✓ Collection "scheduling_outputs" created');
+print('\n  Creating indexes for "scheduling_outputs" collection...');
+db.scheduling_outputs.createIndex({ "decisionId": 1, "skuId": 1 }, { name: "uniq_decision_sku", unique: true, background: true });
+db.scheduling_outputs.createIndex({ "decisionId": 1 }, { name: "idx_scheduling_output_decision_id", background: true });
+db.scheduling_outputs.createIndex({ "skuId": 1 }, { name: "idx_scheduling_output_sku_id", background: true });
+db.scheduling_outputs.createIndex({ "date": 1 }, { name: "idx_scheduling_output_date", background: true });
+print('    ✓ Indexes created for "scheduling_outputs"');
+
+print('\n  Creating "bucket_usage" collection...');
+db.createCollection('bucket_usage');
+print('  ✓ Collection "bucket_usage" created');
+print('\n  Creating indexes for "bucket_usage" collection...');
+db.bucket_usage.createIndex({ "bucketId": 1, "date": 1 }, { name: "uniq_bucket_date", unique: true, background: true });
+db.bucket_usage.createIndex({ "bucketId": 1 }, { name: "idx_bucket_usage_bucket_id", background: true });
+db.bucket_usage.createIndex({ "date": 1 }, { name: "idx_bucket_usage_date", background: true });
+print('    ✓ Indexes created for "bucket_usage"');
+
+print('\n✓ Scheduling database setup complete!');
+
+// ============================================================================
 // CONFIG DATABASE SETUP
 // ============================================================================
 
-print('\n[2/2] Creating config_db database...');
+print('\n[3/3] Creating config_db database...');
 
 // Switch to config_db database (creates it if doesn't exist)
 db = db.getSiblingDB('config_db');
@@ -396,6 +447,19 @@ print('  Enumeration result indexes: ' + db.enumeration_results.getIndexes().len
 print('  Enumeration result documents: ' + db.enumeration_results.countDocuments({}));
 print('  Job status indexes: ' + db.job_status.getIndexes().length);
 print('  Job status documents: ' + db.job_status.countDocuments({}));
+
+// Verify scheduling_db
+db = db.getSiblingDB('scheduling_db');
+print('\nscheduling_db:');
+print('  Collections: ' + db.getCollectionNames().join(', '));
+print('  SKU demand indexes: ' + db.sku_demands.getIndexes().length);
+print('  SKU demand documents: ' + db.sku_demands.countDocuments({}));
+print('  Scheduling decision indexes: ' + db.scheduling_decisions.getIndexes().length);
+print('  Scheduling decision documents: ' + db.scheduling_decisions.countDocuments({}));
+print('  Scheduling output indexes: ' + db.scheduling_outputs.getIndexes().length);
+print('  Scheduling output documents: ' + db.scheduling_outputs.countDocuments({}));
+print('  Bucket usage indexes: ' + db.bucket_usage.getIndexes().length);
+print('  Bucket usage documents: ' + db.bucket_usage.countDocuments({}));
 
 // Verify config_db
 db = db.getSiblingDB('config_db');
