@@ -71,8 +71,8 @@ def render_header(title: str = "Home", subtitle: str | None = None, **_kwargs) -
     )
 
     links_html = "\n".join(
-        f'<a href="?page={quote(page_key)}" class="sfy-nav-link'
-        f'{"  sfy-nav-active" if title == page_key else ""}">{label}</a>'
+        f'<a href="#" onclick="window.parent.location.href=\'?page={quote(page_key)}\'; return false;" '
+        f'class="sfy-nav-link{"  sfy-nav-active" if title == page_key else ""}">{label}</a>'
         for label, page_key in _NAV_ITEMS
     )
 
