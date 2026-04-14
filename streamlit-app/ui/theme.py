@@ -10,12 +10,15 @@ def apply_theme() -> None:
     <style>
     /* Base colors */
     :root {
-      --simmons-blue: #0b5fa5;
-      --simmons-dark: #263238;
-      --simmons-accent: #d32f2f;
+      --simmons-blue: #0046AD; /* Primary Blue */
+      --simmons-secondary: #003478; /* Secondary Blue */
+      --simmons-dark: #00264F; /* Dark Accent */
+      --simmons-accent: #D9534F; /* Danger */
+      --simmons-warning: #FFB74D; /* Amber */
+      --simmons-success: #4CAF50; /* Soft green */
       --simmons-muted: #6b7280;
       --card-bg: #ffffff;
-      --page-bg: #f6f8fa;
+      --page-bg: #f4f6f9;
     }
 
     /* Page background */
@@ -29,15 +32,15 @@ def apply_theme() -> None:
     .simmons-card {
       background: var(--card-bg);
       border-radius: 8px;
-      padding: 12px 16px;
-      box-shadow: 0 1px 4px rgba(16,24,40,0.06);
+      padding: 14px 18px;
+      box-shadow: 0 2px 6px rgba(16,24,40,0.06);
       border: 1px solid rgba(16,24,40,0.04);
     }
 
     .simmons-kpi {
       font-weight: 700;
-      color: var(--simmons-blue);
-      font-size: 22px;
+      color: var(--simmons-dark);
+      font-size: 20px;
     }
 
     .simmons-kpi-label {
@@ -52,10 +55,22 @@ def apply_theme() -> None:
 
     /* Buttons and primary accents */
     .stButton>button {
-      background-color: var(--simmons-blue);
-      color: white;
-      border-radius: 6px;
-      padding: 6px 10px;
+      background-color: var(--simmons-blue) !important;
+      color: white !important;
+      border-radius: 6px !important;
+      padding: 6px 10px !important;
+      border: none !important;
+    }
+
+    .stButton>button.secondary {
+      background-color: white !important;
+      color: var(--simmons-blue) !important;
+      border: 1px solid var(--simmons-blue) !important;
+    }
+
+    /* Sidebar logo */
+    .simmons-sidebar-logo {
+      padding: 8px 0px 12px 0px;
     }
 
     </style>
