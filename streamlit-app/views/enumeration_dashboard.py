@@ -474,8 +474,11 @@ def render():
                 st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
                 if st.button("→ Send to Scheduling", type="primary", key="send_to_sched"):
                     st.session_state["sched_selected_mix_id"] = selected_mix_id
-                    st.session_state.ui_sidebar_nav = "Scheduling Dashboard"
-                    st.session_state.ui_selected_page = "Scheduling Dashboard"
+                    try:
+                        st.query_params["page"] = "Scheduling Dashboard"
+                    except Exception:
+                        st.session_state.ui_selected_page = "Scheduling Dashboard"
+                        st.session_state.ui_sidebar_nav = "Scheduling Dashboard"
 
             # Best bucket unit plan
             if mix_metrics:
