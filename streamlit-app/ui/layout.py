@@ -50,14 +50,15 @@ def render_sidebar(selected: str | None = None) -> str:
     # Sidebar logo + nav
     with st.sidebar:
         # Prefer a provided logo image if present in common asset locations
+        _ui_dir = os.path.dirname(os.path.abspath(__file__))
+        _app_dir = os.path.dirname(_ui_dir)  # streamlit-app/
         logo_paths = [
-            os.path.join("streamlit-app", "static", "simmons_logo.png"),
-            os.path.join("streamlit-app", "assets", "simmons_logo.png"),
-            os.path.join("streamlit-app", "simmons_logo.png"),
-            os.path.join("assets", "simmons_logo.png"),
+            os.path.join(_app_dir, "simmons_logo.png"),
+            os.path.join(_app_dir, "static", "simmons_logo.png"),
+            os.path.join(_app_dir, "assets", "simmons_logo.png"),
         ]
-        # also support a directory named streamlit-app/simmons_logo with arbitrary image files
-        logo_dir = os.path.join("streamlit-app", "simmons_logo")
+        # also support a directory named simmons_logo with arbitrary image files
+        logo_dir = os.path.join(_app_dir, "simmons_logo")
         logo_rendered = False
         # try explicit paths first
         for p in logo_paths:
