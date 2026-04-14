@@ -18,6 +18,7 @@ import random
 from statistics import NormalDist
 import sys
 from typing import Any, Dict, List, Optional
+import uuid
 
 import requests
 from pymongo.database import Database
@@ -478,7 +479,7 @@ def _build_mix(
         "skus": skus,
         "_partAssignments": part_assignments,
         "cutStrategyID": strategy["_id"],
-        "mfgType": strategy["mfgType"],
+        "mfgType": strategy.get("lineType") or strategy.get("mfgType"),
         "beltSpeed": strategy["beltSpeed"],
         "includesFDS": includes_fds,
         "includesRTL": includes_rtl,
@@ -772,8 +773,10 @@ def _upsert_mix(mix_repo: MixRepository, mix_doc: Dict[str, Any]) -> str:
             mix_repo.update(mix_id, mix_doc)
         return mix_id
     else:
+        if "_id" not in mix_doc:
+            mix_doc["_id"] = str(uuid.uuid4())
         created = mix_repo.create(mix_doc)
-        return created["_id"]
+        return str(created["_id"])
 
 
 def _upsert_mix_metric(metric_repo: MixMetricRepository, metric_doc: Dict[str, Any]) -> None:
