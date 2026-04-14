@@ -21,6 +21,12 @@ WORKER_API_URL = os.getenv(
 CONFIG_API_URL = os.getenv(
     "CONFIG_API_URL", "http://localhost:8080/api/config"
 )
+SCHEDULING_API_URL = os.getenv(
+    "SCHEDULING_API_URL", "http://localhost:8080/api/scheduling"
+)
+SCHEDULING_WORKER_API_URL = os.getenv(
+    "SCHEDULING_WORKER_API_URL", "http://localhost:8080/api/scheduling-worker"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -234,4 +240,75 @@ def update_line(line_id: str, payload: dict) -> dict:
 
 def delete_line(line_id: str) -> dict:
     resp = _request("DELETE", f"{CONFIG_API_URL}/lines/{line_id}")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Scheduling Decisions  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_scheduling_decisions(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/scheduling-decisions/search", json=criteria)
+    return resp.json()
+
+
+def create_scheduling_decision(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/scheduling-decisions", json=payload)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Scheduling Outputs  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_scheduling_outputs(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/scheduling-outputs/search", json=criteria)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# SKU Demands  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_sku_demands(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands/search", json=criteria)
+    return resp.json()
+
+
+def create_sku_demand(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands", json=payload)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Scheduling Jobs  (Scheduling Worker API)
+# ---------------------------------------------------------------------------
+
+def list_scheduling_jobs() -> list[dict]:
+    resp = _request("GET", f"{SCHEDULING_WORKER_API_URL}/jobs")
+    return resp.json()
+
+
+def get_scheduling_job(job_id: str) -> dict:
+    resp = _request("GET", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}")
+    return resp.json()
+
+
+def submit_scheduling_job(payload: dict) -> dict:
+    """Submit a scheduling optimization job.
+
+    Required payload keys:
+    - runId (str): human-readable run label
+    Optional:
+    - planStartDate (str, YYYY-MM-DD): start date of planning horizon
+    - horizonDays (int): number of days to schedule (default 12)
+    - saveCsv (bool): whether to write CSV outputs
+    - outputDir (str): output directory path
+    """
+    resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs", json=payload)
+    return resp.json()
+
+
+def cancel_scheduling_job(job_id: str) -> dict:
+    resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}/cancel")
     return resp.json()

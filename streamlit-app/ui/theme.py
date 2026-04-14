@@ -265,6 +265,40 @@ def apply_theme() -> None:
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
 
+    /* Status badges (rendered via inline HTML throughout views) */
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* Tab styling */
+    [data-testid="stTabs"] button {
+      font-weight: 600;
+      color: var(--simmons-dark) !important;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"] {
+      border-bottom: 3px solid var(--simmons-blue) !important;
+      color: var(--simmons-blue) !important;
+    }
+
+    /* Form submit button emphasis */
+    [data-testid="stFormSubmitButton"] button {
+      background: linear-gradient(90deg, var(--simmons-blue), var(--simmons-secondary)) !important;
+      font-weight: 700 !important;
+      font-size: 14px !important;
+      padding: 8px 20px !important;
+    }
+
+    /* Dataframe / table container */
+    [data-testid="stDataFrame"] {
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(16,24,40,0.06);
+    }
+
     </style>
     """
 
