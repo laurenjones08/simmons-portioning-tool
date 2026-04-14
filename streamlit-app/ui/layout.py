@@ -1,8 +1,7 @@
-"""Streamlit UI layout — fixed top navbar with Simmons branding."""
+"""Streamlit UI layout — sticky top navbar built from real Streamlit buttons."""
 import base64
 import os
 from functools import lru_cache
-from urllib.parse import quote
 
 import streamlit as st
 
@@ -62,36 +61,40 @@ def render_sidebar(selected: str | None = None) -> str:
 
 
 def render_header(title: str = "Home", subtitle: str | None = None, **_kwargs) -> None:
-    """Render the fixed top navbar and (for non-Home pages) a page header strip."""
+    """Render the sticky top navbar using real Streamlit buttons + logo."""
     logo_uri = _get_logo_data_uri()
-    logo_html = (
-        f'<img src="{logo_uri}" class="sfy-nav-logo" alt="Simmons Prepared Foods" />'
+    logo_img_html = (
+        f'<div class="sfy-logo-wrap"><img src="{logo_uri}" alt="Simmons Prepared Foods" class="sfy-logo-img"/></div>'
         if logo_uri
-        else '<span class="sfy-nav-wordmark">SIMMONS</span>'
+        else '<div class="sfy-logo-wrap"><span class="sfy-logo-text">SIMMONS</span></div>'
     )
 
-    links_html = "\n".join(
-        f'<a href="#" onclick="window.parent.location.href=\'?page={quote(page_key)}\'; return false;" '
-        f'class="sfy-nav-link{"  sfy-nav-active" if title == page_key else ""}">{label}</a>'
-        for label, page_key in _NAV_ITEMS
-    )
+    # Zero-height CSS anchor injected BEFORE the columns so the :has() selector
+    # can target the immediately-following stHorizontalBlock uniquely.
+    st.markdown('<div class="sfy-navbar-start"></div>', unsafe_allow_html=True)
 
-    page_header_html = ""
+    logo_col, *nav_cols = st.columns([3.0] + [1] * len(_NAV_ITEMS))
+
+    with logo_col:
+        st.markdown(logo_img_html, unsafe_allow_html=True)
+
+    for i, (label, page_key) in enumerate(_NAV_ITEMS):
+        with nav_cols[i]:
+            is_active = title == page_key
+            if st.button(
+                label,
+                key=f"_nav_{page_key}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                try:
+                    st.query_params["page"] = page_key
+                except Exception:
+                    st.session_state.ui_selected_page = page_key
+                    st.session_state.ui_sidebar_nav = page_key
+                st.rerun()
+
+    # Page header strip for non-Home pages
     if title and title != "Home":
         sub_text = f"<p>{subtitle}</p>" if subtitle else ""
-        page_header_html = (
-            f'<div class="sfy-page-header"><h2>{title}</h2>{sub_text}</div>'
-        )
-
-    st.markdown(
-        f"""
-        <div class="sfy-navbar">
-          <div class="sfy-navbar-inner">
-            <div class="sfy-nav-brand">{logo_html}</div>
-            <nav class="sfy-nav-links">{links_html}</nav>
-          </div>
-        </div>
-        {page_header_html}
-        """,
-        unsafe_allow_html=True,
-    )
+        st.markdown(f'<div class="sfy-page-header"><h2>{title}</h2>{sub_text}</div>', unsafe_allow_html=True)

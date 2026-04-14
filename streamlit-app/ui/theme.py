@@ -43,96 +43,98 @@ def apply_theme() -> None:
     [data-testid="stSidebar"]         { display: none !important; }
     section[data-testid="stMain"]     { margin-left: 0 !important; }
 
-    /* ── Content offset for fixed navbar ─────────────────── */
+    /* ── Block container: no top padding (navbar is first element) ───── */
     .block-container {
-      padding-top: 84px !important;
+      padding-top: 0 !important;
       padding-left: 2rem !important;
       padding-right: 2rem !important;
       max-width: 100% !important;
     }
 
     /* ════════════════════════════════════════════════════════
-       FIXED TOP NAVBAR
+       STICKY TOP NAVBAR
+       Built from real st.button widgets + an HTML logo.
+       The .sfy-navbar-start marker is injected just before the
+       st.columns row so we can target it precisely with :has().
        ════════════════════════════════════════════════════════ */
-    .sfy-navbar {
-      position: fixed;
-      top: 0; left: 0; right: 0;
+
+    /* Target the stHorizontalBlock immediately after our .sfy-navbar-start marker */
+    div:has(.sfy-navbar-start) + div [data-testid="stHorizontalBlock"] {
+      background: linear-gradient(90deg, var(--simmons-dark) 0%, var(--simmons-navy) 55%, var(--simmons-blue) 100%) !important;
+      position: sticky !important;
+      top: 0 !important;
+      z-index: 9999 !important;
+      margin-left:  -2rem !important;
+      margin-right: -2rem !important;
+      width: calc(100% + 4rem) !important;
+      min-height: 68px !important;
+      align-items: center !important;
+      box-shadow: 0 2px 18px rgba(0,0,0,0.26) !important;
+      padding: 0 12px !important;
+      gap: 0 !important;
+    }
+
+    /* Logo wrapper */
+    .sfy-logo-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
       height: 68px;
-      background: linear-gradient(90deg, var(--simmons-dark) 0%, var(--simmons-navy) 60%, var(--simmons-blue) 100%);
-      z-index: 99999;
-      box-shadow: 0 2px 18px rgba(0,0,0,0.28);
+      padding-left: 8px;
     }
-
-    .sfy-navbar-inner {
-      display: flex;
-      align-items: center;
-      height: 100%;
-      padding: 0 32px;
-      gap: 16px;
-    }
-
-    /* Logo — white pill so the Simmons logo is legible on any background */
-    .sfy-nav-brand {
-      display: flex;
-      align-items: center;
-      flex-shrink: 0;
+    .sfy-logo-img {
+      height: 58px;
+      max-width: 260px;
+      width: auto;
       background: white;
       border-radius: 6px;
-      padding: 5px 12px;
-      margin-right: 16px;
+      padding: 5px 14px;
+      margin-top: -10px;
     }
-
-    .sfy-nav-logo {
-      height: 44px;
-      width: auto;
-      display: block;
-    }
-
-    .sfy-nav-wordmark {
+    .sfy-logo-text {
+      color: white;
       font-size: 18px;
       font-weight: 800;
-      color: var(--simmons-dark);
       letter-spacing: 0.04em;
     }
 
-    /* Nav links */
-    .sfy-nav-links {
-      display: flex;
-      align-items: stretch;
-      gap: 0;
-      flex: 1;
+    /* Nav buttons: transparent on the blue background */
+    div:has(.sfy-navbar-start) + div [data-testid="stHorizontalBlock"] button {
+      background: transparent !important;
+      color: rgba(255,255,255,0.80) !important;
+      border: none !important;
+      border-bottom: 3px solid transparent !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      font-size: 12px !important;
+      font-weight: 700 !important;
+      letter-spacing: 0.07em !important;
+      text-transform: uppercase !important;
+      height: 68px !important;
+      padding: 0 4px !important;
+      width: 100% !important;
+      transition: color 0.12s, border-color 0.12s, background 0.12s !important;
     }
-
-    .sfy-nav-link {
-      color: rgba(255,255,255,0.78) !important;
-      text-decoration: none !important;
-      padding: 0 20px;
-      font-size: 13.5px;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-      border-bottom: 3px solid transparent;
-      display: flex;
-      align-items: center;
-      white-space: nowrap;
-      transition: color 0.12s, border-color 0.12s, background 0.12s;
-    }
-
-    .sfy-nav-link:hover {
+    div:has(.sfy-navbar-start) + div [data-testid="stHorizontalBlock"] button:hover {
       color: white !important;
-      background: rgba(255,255,255,0.08);
-      border-bottom-color: rgba(255,255,255,0.45);
+      background: rgba(255,255,255,0.09) !important;
+      border-bottom-color: rgba(255,255,255,0.55) !important;
     }
-
-    .sfy-nav-active {
+    /* Active page button (type=primary) */
+    div:has(.sfy-navbar-start) + div [data-testid="stHorizontalBlock"] [data-testid="baseButton-primary"] {
       color: white !important;
-      background: rgba(255,255,255,0.12);
-      border-bottom-color: white;
+      background: rgba(255,255,255,0.13) !important;
+      border-bottom-color: white !important;
+    }
+    /* Suppress any focus ring on nav buttons */
+    div:has(.sfy-navbar-start) + div [data-testid="stHorizontalBlock"] button:focus {
+      outline: none !important;
+      box-shadow: none !important;
     }
 
     /* ── Page header strip ──────────────────────────────── */
     .sfy-page-header {
-      padding: 4px 0 20px 0;
+      padding: 20px 0 18px 0;
       border-bottom: 2px solid rgba(0,52,120,0.10);
       margin-bottom: 24px;
     }
