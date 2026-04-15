@@ -109,6 +109,39 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         "B 540-590", "B 590-640", "B 640-690", "B 690-1000"
     ]
 
+    big_allowed = {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 0,
+        "F": 1,
+        "G": 1,
+        "H": 0,
+    }
+
+    small_allowed = {
+        "A": 0,
+        "B": 1,
+        "C": 1,
+        "D": 0,
+        "E": 1,
+        "F": 1,
+        "G": 0,
+        "H": 1,
+    }
+
+    bird_type = {}
+    for p in P:
+        if big_allowed[p] == 1 and small_allowed[p] == 1:
+            bird_type[p] = "all"
+        elif big_allowed[p] == 1:
+            bird_type[p] = "big"
+        elif small_allowed[p] == 1:
+            bird_type[p] = "small"
+        else:
+            bird_type[p] = "none"
+
     # --- Build real production dates (Mon-Sat only) ---
     start_date = pd.Timestamp(plan_start_date)
     all_calendar_days = pd.date_range(start=start_date, periods=40, freq="D")
@@ -329,4 +362,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         "L_delay": L_delay,
         "line_throughput": line_throughput,
         "gamma": gamma,
+        "big_allowed": big_allowed,
+        "small_allowed": small_allowed,
+        "bird_type": bird_type,
     }
