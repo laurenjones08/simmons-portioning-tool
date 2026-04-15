@@ -22,6 +22,9 @@ The `init-mongo.js` script automatically creates:
 - **Indexes**:
   - `idx_value_type` - Fast filtering by value type
   - `idx_updated_at` - Sorting by last update timestamp
+- **Optional Snapshot Restore**:
+  - If `mongodb-bootstrap.archive.gz` exists in this folder, Mongo restores that archive first
+  - After a restore, `init-mongo.js` detects the restore marker and skips the default seed path
 - **Default Configuration Values**:
   - `enumeration.defaultMaxTrim` - Default max trim (int: 15)
   - `enumeration.defaultMinTargetDelta` - Default min target delta (float: 0.5)
@@ -35,10 +38,12 @@ The `init-mongo.js` script automatically creates:
 ## How It Works
 
 1. When the MongoDB container starts for the **first time**, it looks for scripts in `/docker-entrypoint-initdb.d/`
-2. The `init-mongo.js` script is mounted to this directory via Docker Compose
-3. MongoDB executes the script automatically using `mongosh`
-4. The script creates databases, collections, indexes, and default data
-5. On subsequent container starts, the script is **not re-executed** (MongoDB tracks initialization)
+2. The `00-restore-bootstrap.sh` script checks for `mongodb-bootstrap.archive.gz`
+3. If the archive exists, MongoDB restores it before running the JS bootstrap
+4. The `init-mongo.js` script is mounted to this directory via Docker Compose
+5. MongoDB executes the JS script automatically using `mongosh`
+6. If no archive exists, the script creates databases, collections, indexes, and default data
+7. On subsequent container starts, the scripts are **not re-executed** (MongoDB tracks initialization)
 
 ## Important Notes
 
@@ -77,6 +82,16 @@ The script includes commented-out sample SKU data. To enable it:
 1. Uncomment the `db.skus.insertMany([...])` section in `init-mongo.js`
 2. Reset the MongoDB volume (see above)
 3. Restart the containers
+
+### Capturing the Current Database State
+
+To snapshot the live MongoDB contents into the repo:
+
+```powershell
+.\scripts\capture-mongodb-state.ps1
+```
+
+That writes `mongodb-init/mongodb-bootstrap.archive.gz`, which the startup restore hook will apply automatically on the next fresh container initialization.
 
 ## Verification
 

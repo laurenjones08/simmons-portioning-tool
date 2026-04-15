@@ -12,6 +12,8 @@ def test_line_create_normalizes_cut_strategy_ids():
         lineType="DSI884",
         plant=" FSP ",
         hoursOfLaborAvailablePerShift=8.0,
+        unitsAvailable=2,
+        lineThroughput=9000.0,
         permittedCutStrategyIds=[" strategy-1 ", "strategy-2"],
         isActive=True,
     )
@@ -21,6 +23,8 @@ def test_line_create_normalizes_cut_strategy_ids():
     assert line.line_type.value == "DSI884"
     assert line.plant == "FSP"
     assert line.hours_of_labor_available_per_shift == 8.0
+    assert line.units_available == 2
+    assert line.line_throughput == 9000.0
     assert line.permitted_cut_strategy_ids == ["strategy-1", "strategy-2"]
 
 
@@ -32,6 +36,7 @@ def test_line_create_rejects_duplicate_cut_strategy_ids():
             lineType="DSI884",
             plant="FSP",
             hoursOfLaborAvailablePerShift=8.0,
+            unitsAvailable=2,
             permittedCutStrategyIds=["strategy-1", "strategy-1"],
             isActive=True,
         )

@@ -12,9 +12,10 @@ class LineRepository:
 
     def __init__(self, database: Database):
         self.collection: Collection = database["lines"]
-        self.collection.create_index("lineId", unique=True)
-        self.collection.create_index("isActive")
+        self.collection.create_index("lineId", name="uniq_line_id", unique=True)
+        self.collection.create_index("isActive", name="idx_lines_active")
         self.backfill_line_type()
+        self.backfill_units_available()
 
     @staticmethod
     def _infer_line_type(document: Dict[str, Any]) -> Optional[str]:
@@ -39,6 +40,8 @@ class LineRepository:
         inferred_line_type = self._infer_line_type(normalized)
         if inferred_line_type:
             normalized["lineType"] = inferred_line_type
+        if "unitsAvailable" not in normalized:
+            normalized["unitsAvailable"] = 0
         return normalized
 
     def backfill_line_type(self) -> None:
@@ -53,6 +56,15 @@ class LineRepository:
                     )
         except PyMongoError as exc:
             raise Exception(f"Database error backfilling lineType: {exc}") from exc
+
+    def backfill_units_available(self) -> None:
+        try:
+            self.collection.update_many(
+                {"unitsAvailable": {"$exists": False}},
+                {"$set": {"unitsAvailable": 0}},
+            )
+        except PyMongoError as exc:
+            raise Exception(f"Database error backfilling unitsAvailable: {exc}") from exc
 
     def create(self, document: Dict[str, Any]) -> Dict[str, Any]:
         try:

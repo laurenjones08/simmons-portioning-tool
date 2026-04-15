@@ -110,6 +110,7 @@ if lines:
                 "lineType": line.get("lineType", ""),
                 "plant": line.get("plant", ""),
                 "hoursOfLaborAvailablePerShift": line.get("hoursOfLaborAvailablePerShift"),
+                "unitsAvailable": line.get("unitsAvailable"),
                 "isActive": line.get("isActive", False),
                 "permittedCutStrategyIds": ", ".join(line.get("permittedCutStrategyIds", [])),
             }
@@ -133,6 +134,12 @@ with st.form("create_line_form", clear_on_submit=True):
         value=8.0,
         step=0.5,
     )
+    create_units_available = st.number_input(
+        "Units available *",
+        min_value=0,
+        value=0,
+        step=1,
+    )
     create_is_active = st.checkbox("Active", value=True)
     create_cut_strategy_ids = st.multiselect(
         "Permitted cut strategies",
@@ -148,6 +155,7 @@ if create_clicked:
         "lineType": create_line_type,
         "plant": create_plant.strip(),
         "hoursOfLaborAvailablePerShift": float(create_hours_of_labor),
+        "unitsAvailable": int(create_units_available),
         "isActive": create_is_active,
         "permittedCutStrategyIds": create_cut_strategy_ids,
     }
@@ -186,6 +194,12 @@ else:
             value=float(selected_line.get("hoursOfLaborAvailablePerShift", 8.0)),
             step=0.5,
         )
+        edit_units_available = st.number_input(
+            "Units available *",
+            min_value=0,
+            value=int(selected_line.get("unitsAvailable", 0)),
+            step=1,
+        )
         edit_is_active = st.checkbox("Active", value=bool(selected_line.get("isActive", True)))
         edit_cut_strategy_ids = st.multiselect(
             "Permitted cut strategies",
@@ -201,6 +215,7 @@ else:
             "lineType": edit_line_type,
             "plant": edit_plant.strip(),
             "hoursOfLaborAvailablePerShift": float(edit_hours_of_labor),
+            "unitsAvailable": int(edit_units_available),
             "isActive": edit_is_active,
             "permittedCutStrategyIds": edit_cut_strategy_ids,
         }
