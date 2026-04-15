@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,6 +25,18 @@ class LineBase(BaseModel):
         ...,
         alias="hoursOfLaborAvailablePerShift",
         gt=0,
+    )
+    units_available: int = Field(
+        ...,
+        alias="unitsAvailable",
+        ge=0,
+        description="Number of individual cutting units available on the line",
+    )
+    line_throughput: Optional[float] = Field(
+        None,
+        alias="lineThroughput",
+        ge=0.0,
+        description="Total line throughput capacity in lbs/hour",
     )
     permitted_cut_strategy_ids: List[str] = Field(
         default_factory=list,

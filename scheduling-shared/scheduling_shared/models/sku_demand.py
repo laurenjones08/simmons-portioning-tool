@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from bson import ObjectId
 from pydantic import BaseModel, Field
@@ -49,11 +49,41 @@ class SKUDemand(SKUDemandBase):
 
 class SKUDemandSearchCriteria(BaseModel):
     sku_id: Optional[str] = Field(None, alias="skuId", min_length=1, max_length=100)
+    sku_ids: Optional[List[str]] = Field(None, alias="skuIds", min_length=1)
     demand_type: Optional[DemandType] = Field(None, alias="demandType")
     due_date: Optional[date] = Field(None, alias="dueDate")
+    due_dates: Optional[List[date]] = Field(None, alias="dueDates", min_length=1)
 
     model_config = {
         "populate_by_name": True,
-        "json_schema_extra": {"example": {"skuId": "50624", "demandType": "Short"}},
+        "json_schema_extra": {
+            "example": {
+                "skuIds": ["50624", "50625"],
+                "demandType": "Short",
+                "dueDates": ["2026-04-15", "2026-04-16"],
+            }
+        },
     }
 
+
+class SKUDemandBulkImportRequest(BaseModel):
+    demands: List[SKUDemandCreate] = Field(..., alias="demands", min_length=1)
+
+    model_config = {"populate_by_name": True}
+
+
+class SKUDemandBulkImportError(BaseModel):
+    row_index: int = Field(..., alias="rowIndex", ge=1)
+    sku_id: Optional[str] = Field(None, alias="skuId", min_length=1, max_length=100)
+    error: str = Field(..., min_length=1)
+
+    model_config = {"populate_by_name": True}
+
+
+class SKUDemandBulkImportResponse(BaseModel):
+    total: int = Field(..., ge=0)
+    successful: int = Field(..., ge=0)
+    failed: int = Field(..., ge=0)
+    errors: List[SKUDemandBulkImportError] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}

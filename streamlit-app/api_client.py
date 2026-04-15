@@ -18,14 +18,14 @@ ENUMERATION_API_URL = os.getenv(
 WORKER_API_URL = os.getenv(
     "WORKER_API_URL", "http://localhost:8080/api/enumeration-worker"
 )
+SCHEDULING_WORKER_API_URL = os.getenv(
+    "SCHEDULING_WORKER_API_URL", "http://localhost:8080/api/scheduling-worker"
+)
 CONFIG_API_URL = os.getenv(
     "CONFIG_API_URL", "http://localhost:8080/api/config"
 )
 SCHEDULING_API_URL = os.getenv(
     "SCHEDULING_API_URL", "http://localhost:8080/api/scheduling"
-)
-SCHEDULING_WORKER_API_URL = os.getenv(
-    "SCHEDULING_WORKER_API_URL", "http://localhost:8080/api/scheduling-worker"
 )
 
 
@@ -191,6 +191,32 @@ def cancel_job(job_id: str) -> dict:
     return resp.json()
 
 
+def list_scheduling_jobs(status_filter: str | None = None) -> list[dict]:
+    params = {"status": status_filter} if status_filter else None
+    resp = _request("GET", f"{SCHEDULING_WORKER_API_URL}/jobs", params=params)
+    return resp.json()
+
+
+def get_scheduling_job(job_id: str) -> dict:
+    resp = _request("GET", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}")
+    return resp.json()
+
+
+def submit_scheduling_job(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs", json=payload)
+    return resp.json()
+
+
+def cancel_scheduling_job(job_id: str) -> dict:
+    resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}/cancel")
+    return resp.json()
+
+
+def get_scheduling_job_artifacts(job_id: str) -> list[dict]:
+    resp = _request("GET", f"{SCHEDULING_API_URL}/jobs/{job_id}/artifacts")
+    return resp.json()
+
+
 # ---------------------------------------------------------------------------
 # Config  (Config API)
 # ---------------------------------------------------------------------------
@@ -311,4 +337,94 @@ def submit_scheduling_job(payload: dict) -> dict:
 
 def cancel_scheduling_job(job_id: str) -> dict:
     resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}/cancel")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Available WIP  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_available_wip(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/available-wip/search", json=criteria)
+    return resp.json()
+
+
+def create_available_wip(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/available-wip", json=payload)
+    return resp.json()
+
+
+def update_available_wip(wip_id: str, payload: dict) -> dict:
+    resp = _request("PUT", f"{SCHEDULING_API_URL}/available-wip/{wip_id}", json=payload)
+    return resp.json()
+
+
+def delete_available_wip(wip_id: str) -> dict:
+    resp = _request("DELETE", f"{SCHEDULING_API_URL}/available-wip/{wip_id}")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# SKU Demands  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_sku_demands(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands/search", json=criteria)
+    return resp.json()
+
+
+def create_sku_demand(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands", json=payload)
+    return resp.json()
+
+
+def bulk_create_sku_demands(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands/bulk", json=payload)
+    return resp.json()
+
+
+def update_sku_demand(demand_id: str, payload: dict) -> dict:
+    resp = _request("PUT", f"{SCHEDULING_API_URL}/sku-demands/{demand_id}", json=payload)
+    return resp.json()
+
+
+def delete_sku_demand(demand_id: str) -> dict:
+    resp = _request("DELETE", f"{SCHEDULING_API_URL}/sku-demands/{demand_id}")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Monthly Contract Demands  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_monthly_contract_demands(criteria: dict) -> list[dict]:
+    resp = _request(
+        "POST",
+        f"{SCHEDULING_API_URL}/monthly-contracts/search",
+        json=criteria,
+    )
+    return resp.json()
+
+
+def create_monthly_contract_demand(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/monthly-contracts", json=payload)
+    return resp.json()
+
+
+def bulk_create_monthly_contract_demands(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/monthly-contracts/bulk", json=payload)
+    return resp.json()
+
+
+def update_monthly_contract_demand(contract_id: str, payload: dict) -> dict:
+    resp = _request(
+        "PUT",
+        f"{SCHEDULING_API_URL}/monthly-contracts/{contract_id}",
+        json=payload,
+    )
+    return resp.json()
+
+
+def delete_monthly_contract_demand(contract_id: str) -> dict:
+    resp = _request("DELETE", f"{SCHEDULING_API_URL}/monthly-contracts/{contract_id}")
     return resp.json()

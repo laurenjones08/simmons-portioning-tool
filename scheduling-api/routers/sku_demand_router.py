@@ -5,7 +5,14 @@ from pymongo.database import Database
 
 from database import get_database
 from repositories.sku_demand_repository import SKUDemandRepository
-from scheduling_shared.models.sku_demand import SKUDemand, SKUDemandCreate, SKUDemandSearchCriteria, SKUDemandUpdate
+from scheduling_shared.models.sku_demand import (
+    SKUDemand,
+    SKUDemandBulkImportRequest,
+    SKUDemandBulkImportResponse,
+    SKUDemandCreate,
+    SKUDemandSearchCriteria,
+    SKUDemandUpdate,
+)
 from services.sku_demand_service import SKUDemandService
 
 router = APIRouter()
@@ -28,6 +35,19 @@ async def create(payload: SKUDemandCreate, service: SKUDemandService = Depends(g
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error creating SKU demand: {exc}")
+
+
+@router.post("/bulk", response_model=SKUDemandBulkImportResponse, status_code=status.HTTP_201_CREATED)
+async def bulk_create(
+    payload: SKUDemandBulkImportRequest,
+    service: SKUDemandService = Depends(get_service),
+):
+    try:
+        return service.bulk_create(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error bulk creating SKU demands: {exc}")
 
 
 @router.get("/{document_id}", response_model=SKUDemand)
@@ -68,4 +88,3 @@ async def delete(document_id: str, service: SKUDemandService = Depends(get_servi
     if not deleted:
         raise HTTPException(status_code=404, detail=f"SKU demand with id {document_id} not found")
     return {"deleted": True, "skuDemandId": document_id}
-

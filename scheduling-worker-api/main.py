@@ -43,13 +43,16 @@ app = FastAPI(
 ## Scheduling Worker API
 
 Runs the scheduling optimization pipeline in a background job and stores serialized output summaries.
+Each job must include a `plantId` and a `skuIds` list. The worker validates that every SKU belongs
+to the same plant before scheduling. When `saveCsv` is enabled, the worker also uploads CSV artifacts
+to the S3-compatible object store.
 
 ### Collections written
 
 | Collection | Purpose |
 |---|---|
 | `scheduling_jobs` | Job lifecycle and progress |
-| `scheduling_results` | Serialized scheduling outputs |
+| `scheduling_results` | Serialized scheduling outputs and artifact metadata |
 """,
     version="1.0.0",
     lifespan=lifespan,
@@ -98,4 +101,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=8004, reload=True, log_level="info")
-

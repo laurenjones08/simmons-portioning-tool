@@ -445,7 +445,7 @@ class TestLineFunctions:
 
     @patch("api_client.requests.request")
     def test_create_line(self, mock_req):
-        payload = {"lineId": "DSI884", "friendlyName": "DSI 884", "lineType": "DSI884", "plant": "FSP", "hoursOfLaborAvailablePerShift": 8.0, "permittedCutStrategyIds": []}
+        payload = {"lineId": "DSI884", "friendlyName": "DSI 884", "lineType": "DSI884", "plant": "FSP", "hoursOfLaborAvailablePerShift": 8.0, "unitsAvailable": 2, "permittedCutStrategyIds": []}
         mock_req.return_value = _mock_response(201, payload)
         result = create_line(payload)
         args, kwargs = mock_req.call_args
@@ -456,7 +456,7 @@ class TestLineFunctions:
 
     @patch("api_client.requests.request")
     def test_update_line(self, mock_req):
-        payload = {"friendlyName": "DSI 884", "lineType": "DSI884", "plant": "FSP", "hoursOfLaborAvailablePerShift": 8.0, "isActive": True, "permittedCutStrategyIds": []}
+        payload = {"friendlyName": "DSI 884", "lineType": "DSI884", "plant": "FSP", "hoursOfLaborAvailablePerShift": 8.0, "unitsAvailable": 2, "isActive": True, "permittedCutStrategyIds": []}
         mock_req.return_value = _mock_response(200, {"lineId": "DSI884"})
         result = update_line("DSI884", payload)
         args, kwargs = mock_req.call_args
