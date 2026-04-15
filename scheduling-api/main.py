@@ -2,9 +2,15 @@ from contextlib import asynccontextmanager
 import logging
 import os
 import time
+import sys
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+SHARED_PATH = Path("/shared")
+if SHARED_PATH.exists() and str(SHARED_PATH) not in sys.path:
+    sys.path.insert(0, str(SHARED_PATH))
 
 from config import get_settings
 from database import close_mongo_connection

@@ -15,6 +15,36 @@ print('========================================');
 print('MongoDB Initialization Script Starting');
 print('========================================');
 
+const bootstrapMarkerDb = db.getSiblingDB('local');
+const bootstrapMarker =
+    bootstrapMarkerDb.getCollectionNames().includes('bootstrap_metadata')
+        ? bootstrapMarkerDb.bootstrap_metadata.findOne({ "_id": "mongodb-bootstrap-archive-applied" })
+        : null;
+
+if (bootstrapMarker) {
+    print('MongoDB bootstrap archive already restored; skipping schema/default bootstrap.');
+    quit();
+}
+
+function ensureCollection(collectionName) {
+    if (db.getCollectionNames().includes(collectionName)) {
+        print('  Collection "' + collectionName + '" already exists; skipping creation');
+        return false;
+    }
+
+    db.createCollection(collectionName);
+    print('  ✓ Collection "' + collectionName + '" created');
+    return true;
+}
+
+function ensureDocumentById(collectionName, document) {
+    db.getCollection(collectionName).updateOne(
+        { "_id": document._id },
+        { $setOnInsert: document },
+        { upsert: true }
+    );
+}
+
 // ============================================================================
 // ENUMERATION DATABASE SETUP
 // ============================================================================
@@ -28,9 +58,7 @@ print('  ✓ Database "enumeration_db" created/selected');
 
 // Create the 'skus' collection
 print('\n  Creating "skus" collection...');
-db.createCollection('skus');
-
-print('  ✓ Collection "skus" created');
+ensureCollection('skus');
 
 // Create indexes for the skus collection
 print('\n  Creating indexes for "skus" collection...');
@@ -50,9 +78,7 @@ print('    ✓ Index created: idx_customer_name');
 
 // Create the 'mixes' collection
 print('\n  Creating "mixes" collection...');
-db.createCollection('mixes');
-
-print('  ✓ Collection "mixes" created');
+ensureCollection('mixes');
 
 // Create indexes for the mixes collection
 print('\n  Creating indexes for "mixes" collection...');
@@ -130,16 +156,13 @@ print('    ✓ Index created: idx_mfg_type_flags (compound)');
 
 // Create collections for staged enumeration runs and results
 print('\n  Creating "enumeration_runs" collection...');
-db.createCollection('enumeration_runs');
-print('  ✓ Collection "enumeration_runs" created');
+ensureCollection('enumeration_runs');
 
 print('\n  Creating "enumeration_results" collection...');
-db.createCollection('enumeration_results');
-print('  ✓ Collection "enumeration_results" created');
+ensureCollection('enumeration_results');
 
 print('\n  Creating "job_status" collection (enumeration-worker-api)...');
-db.createCollection('job_status');
-print('  ✓ Collection "job_status" created');
+ensureCollection('job_status');
 
 print('\n  Creating indexes for enumeration run tracking...');
 db.enumeration_runs.createIndex(
@@ -231,18 +254,17 @@ db = db.getSiblingDB('scheduling_db');
 print('  ✓ Database "scheduling_db" created/selected');
 
 print('\n  Creating "sku_demands" collection...');
-db.createCollection('sku_demands');
-print('  ✓ Collection "sku_demands" created');
+ensureCollection('sku_demands');
 print('\n  Creating indexes for "sku_demands" collection...');
 db.sku_demands.createIndex({ "skuId": 1, "demandType": 1, "dueDate": 1 }, { name: "uniq_sku_demand_key", unique: true, background: true });
+db.sku_demands.createIndex({ "demandType": 1, "dueDate": 1, "skuId": 1 }, { name: "idx_sku_demand_type_due_date_sku_id", background: true });
 db.sku_demands.createIndex({ "skuId": 1 }, { name: "idx_sku_demand_sku_id", background: true });
 db.sku_demands.createIndex({ "demandType": 1 }, { name: "idx_sku_demand_type", background: true });
 db.sku_demands.createIndex({ "dueDate": 1 }, { name: "idx_sku_demand_due_date", background: true });
 print('    ✓ Indexes created for "sku_demands"');
 
 print('\n  Creating "monthly_contracts" collection...');
-db.createCollection('monthly_contracts');
-print('  ✓ Collection "monthly_contracts" created');
+ensureCollection('monthly_contracts');
 print('\n  Creating indexes for "monthly_contracts" collection...');
 db.monthly_contracts.createIndex({ "skuId": 1, "yearMonth": 1 }, { name: "uniq_sku_year_month", unique: true, background: true });
 db.monthly_contracts.createIndex({ "skuId": 1 }, { name: "idx_monthly_contract_sku_id", background: true });
@@ -250,8 +272,7 @@ db.monthly_contracts.createIndex({ "yearMonth": 1 }, { name: "idx_monthly_contra
 print('    ✓ Indexes created for "monthly_contracts"');
 
 print('\n  Creating "scheduling_decisions" collection...');
-db.createCollection('scheduling_decisions');
-print('  ✓ Collection "scheduling_decisions" created');
+ensureCollection('scheduling_decisions');
 print('\n  Creating indexes for "scheduling_decisions" collection...');
 db.scheduling_decisions.createIndex({ "mixId": 1, "lineId": 1, "date": 1 }, { name: "uniq_mix_line_date", unique: true, background: true });
 db.scheduling_decisions.createIndex({ "mixId": 1 }, { name: "idx_scheduling_decision_mix_id", background: true });
@@ -260,8 +281,7 @@ db.scheduling_decisions.createIndex({ "date": 1 }, { name: "idx_scheduling_decis
 print('    ✓ Indexes created for "scheduling_decisions"');
 
 print('\n  Creating "scheduling_outputs" collection...');
-db.createCollection('scheduling_outputs');
-print('  ✓ Collection "scheduling_outputs" created');
+ensureCollection('scheduling_outputs');
 print('\n  Creating indexes for "scheduling_outputs" collection...');
 db.scheduling_outputs.createIndex({ "decisionId": 1, "skuId": 1 }, { name: "uniq_decision_sku", unique: true, background: true });
 db.scheduling_outputs.createIndex({ "decisionId": 1 }, { name: "idx_scheduling_output_decision_id", background: true });
@@ -270,15 +290,13 @@ db.scheduling_outputs.createIndex({ "date": 1 }, { name: "idx_scheduling_output_
 print('    ✓ Indexes created for "scheduling_outputs"');
 
 print('\n  Creating "bucket_usage" collection...');
-db.createCollection('bucket_usage');
-print('  ✓ Collection "bucket_usage" created');
+ensureCollection('bucket_usage');
 print('\n  Creating indexes for "bucket_usage" collection...');
 db.bucket_usage.createIndex({ "bucketId": 1, "date": 1 }, { name: "uniq_bucket_date", unique: true, background: true });
 db.bucket_usage.createIndex({ "bucketId": 1 }, { name: "idx_bucket_usage_bucket_id", background: true });
 db.bucket_usage.createIndex({ "date": 1 }, { name: "idx_bucket_usage_date", background: true });
 print('\n  Creating "available_wip" collection...');
-db.createCollection('available_wip');
-print('  ✓ Collection "available_wip" created');
+ensureCollection('available_wip');
 print('\n  Creating indexes for "available_wip" collection...');
 db.available_wip.createIndex({ "plantName": 1, "bucketId": 1 }, { name: "uniq_plant_bucket", unique: true, background: true });
 db.available_wip.createIndex({ "plantName": 1 }, { name: "idx_available_wip_plant_name", background: true });
@@ -301,9 +319,7 @@ print('  ✓ Database "config_db" created/selected');
 
 // Create the 'global_config' collection
 print('\n  Creating "global_config" collection...');
-db.createCollection('global_config');
-
-print('  ✓ Collection "global_config" created');
+ensureCollection('global_config');
 
 // Create indexes for the global_config collection
 print('\n  Creating indexes for "global_config" collection...');
@@ -329,16 +345,14 @@ db.global_config.createIndex(
 print('    ✓ Index created: idx_updated_at');
 
 print('\n  Creating "lines" collection...');
-db.createCollection('lines');
-
-print('  ✓ Collection "lines" created');
+ensureCollection('lines');
 db.lines.createIndex({ "lineId": 1 }, { name: "uniq_line_id", unique: true, background: true });
 db.lines.createIndex({ "isActive": 1 }, { name: "idx_lines_active", background: true });
 print('    ✓ Indexes created for "lines" collection');
 
 // Insert default configuration values
-print('\n  Inserting default configuration values...');
-db.global_config.insertMany([
+print('\n  Ensuring default configuration values...');
+[
     {
         "_id": "enumeration.defaultMaxTrim",
         "key": "enumeration.defaultMaxTrim",
@@ -446,9 +460,11 @@ db.global_config.insertMany([
         "minValue": 0.0,
         "maxValue": 10.0
     }
-]);
+].forEach(function (document) {
+    ensureDocumentById('global_config', document);
+});
 
-print('  ✓ Default configuration values inserted');
+print('  ✓ Default configuration values ensured');
 
 print('\n✓ Config database setup complete!');
 

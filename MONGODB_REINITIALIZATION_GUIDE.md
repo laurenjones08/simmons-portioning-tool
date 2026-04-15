@@ -4,6 +4,8 @@
 
 The MongoDB initialization script (`mongodb-init/init-mongo.js`) only runs automatically when MongoDB starts with an **empty database**. This guide explains how to force re-execution of the bootstrap script.
 
+If `mongodb-init/mongodb-bootstrap.archive.gz` exists, the container bootstrap now restores that archive first and then skips the default seed path. That makes the repo snapshot the authoritative startup state.
+
 ## Methods to Reinitialize MongoDB
 
 ### Method 1: PowerShell Script (Recommended for Windows)
@@ -85,6 +87,14 @@ Get-Content mongodb-init/init-mongo.js | docker exec -i mongodb mongosh -u root 
 - You need fine-grained control
 - You want to drop only specific collections
 - Debugging initialization issues
+
+### Method 5: Capture the Current State Into the Repo
+
+```powershell
+.\scripts\capture-mongodb-state.ps1
+```
+
+This exports the live MongoDB contents into `mongodb-init/mongodb-bootstrap.archive.gz`. On the next fresh container start, the bootstrap restore hook applies that archive automatically.
 
 ---
 

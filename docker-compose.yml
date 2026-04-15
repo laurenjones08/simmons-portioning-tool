@@ -26,7 +26,7 @@ services:
     # Initialization script for bootstrapping databases and collections
     volumes:
       - mongo_data:/data/db
-      - ./mongodb-init/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+      - ./mongodb-init:/docker-entrypoint-initdb.d:ro
 
     # Connect to custom network for service communication
     networks:

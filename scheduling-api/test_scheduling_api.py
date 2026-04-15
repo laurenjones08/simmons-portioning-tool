@@ -42,6 +42,7 @@ from scheduling_shared.models.monthly_contract_demand import MonthlyContractDema
 from scheduling_shared.models.monthly_contract_demand import MonthlyContractDemandCreate  # noqa: E402
 from scheduling_shared.models.sku_demand import SKUDemandBulkImportRequest  # noqa: E402
 from scheduling_shared.models.sku_demand import SKUDemandCreate  # noqa: E402
+from scheduling_shared.models.sku_demand import SKUDemandSearchCriteria  # noqa: E402
 from scheduling_shared.models.scheduling_decision import SchedulingDecisionCreate  # noqa: E402
 from routers import available_wip_router, job_artifacts_router, monthly_contract_demand_router, sku_demand_router  # noqa: E402
 
@@ -97,6 +98,17 @@ def test_sku_demand_bulk_import_model_validation():
     )
     assert len(model.demands) == 1
     assert model.demands[0].sku_id == "50624"
+
+
+def test_sku_demand_search_model_validation():
+    model = SKUDemandSearchCriteria(
+        skuIds=["50624", "50625"],
+        demandType="Short",
+        dueDates=["2026-04-15", "2026-04-16"],
+    )
+    assert model.sku_ids == ["50624", "50625"]
+    assert model.demand_type.value == "Short"
+    assert [str(date) for date in model.due_dates] == ["2026-04-15", "2026-04-16"]
 
 
 def test_available_wip_model_validation():
@@ -242,6 +254,40 @@ def test_sku_demand_bulk_import_route_uses_service():
         body = response.json()
         assert body["total"] == 2
         assert body["successful"] == 2
+    finally:
+        app.dependency_overrides.pop(sku_demand_router.get_service, None)
+
+
+def test_sku_demand_search_route_uses_service():
+    class FakeService:
+        def search(self, criteria):
+            assert criteria.sku_ids == ["50624", "50625"]
+            assert criteria.demand_type.value == "Short"
+            assert [str(date) for date in criteria.due_dates] == ["2026-04-15", "2026-04-16"]
+            return [
+                {
+                    "_id": "sd-1",
+                    "skuId": "50624",
+                    "demandValue": 1500.0,
+                    "demandType": "Short",
+                    "dueDate": "2026-04-15",
+                }
+            ]
+
+    app.dependency_overrides[sku_demand_router.get_service] = lambda: FakeService()
+    try:
+        response = client.post(
+            "/sku-demands/search",
+            json={
+                "skuIds": ["50624", "50625"],
+                "demandType": "Short",
+                "dueDates": ["2026-04-15", "2026-04-16"],
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body[0]["skuId"] == "50624"
+        assert body[0]["demandType"] == "Short"
     finally:
         app.dependency_overrides.pop(sku_demand_router.get_service, None)
 

@@ -5,8 +5,6 @@ This page references the Enumeration SKU API so monthly contract rows can be tie
 to real SKU trade numbers.
 """
 
-import csv
-import io
 import os
 import sys
 from datetime import date
@@ -25,51 +23,7 @@ from api_client import (  # noqa: E402
     search_skus,
     update_monthly_contract_demand,
 )
-
-
-_MONTHLY_CONTRACT_FIELD_KEY_MAP = {
-    "skuid": "skuId",
-    "tradenumber": "skuId",
-    "yearmonth": "yearMonth",
-    "month": "yearMonth",
-    "demandlbs": "demandLbs",
-    "demandvalue": "demandLbs",
-    "lbs": "demandLbs",
-}
-
-
-def _normalize_keys(record: dict) -> dict:
-    normalized: dict = {}
-    for key, value in record.items():
-        if key is None:
-            continue
-        key_text = str(key).strip()
-        if not key_text:
-            continue
-        normalized[_MONTHLY_CONTRACT_FIELD_KEY_MAP.get(key_text.lower(), key_text)] = value
-    return normalized
-
-
-def _parse_year_month_value(value) -> str:
-    if isinstance(value, date):
-        return value.strftime("%Y-%m")
-    text = str(value).strip()
-    if not text:
-        raise ValueError("yearMonth is required.")
-    try:
-        return pd.Period(text, freq="M").strftime("%Y-%m")
-    except Exception as exc:
-        raise ValueError("yearMonth must be in YYYY-MM format.") from exc
-
-
-def _parse_float_value(value, field_name: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be numeric.") from exc
-    if parsed < 0:
-        raise ValueError(f"{field_name} must be greater than or equal to 0.")
-    return parsed
+from monthly_contract_import import parse_monthly_contract_upload_content  # noqa: E402
 
 
 def _load_skus() -> list[dict]:
@@ -112,42 +66,6 @@ def _build_search_criteria(sku_id: str, year_month: str) -> dict:
     if year_month.strip():
         criteria["yearMonth"] = year_month.strip()
     return criteria
-
-
-def _parse_csv_payload(uploaded_file, valid_sku_ids: set[str]) -> tuple[list[dict], list[str], str | None]:
-    file_name = uploaded_file.name.lower()
-    if not file_name.endswith(".csv"):
-        return [], [], "Please upload a CSV file."
-
-    content = uploaded_file.getvalue().decode("utf-8")
-    reader = csv.DictReader(io.StringIO(content))
-    if not reader.fieldnames:
-        return [], [], "CSV file is missing a header row."
-
-    records: list[dict] = []
-    errors: list[str] = []
-
-    for row_idx, row in enumerate(reader, start=2):
-        normalized = _normalize_keys(dict(row))
-        try:
-            sku_id = str(normalized.get("skuId", "")).strip()
-            if not sku_id:
-                raise ValueError("skuId is required.")
-            if valid_sku_ids and sku_id not in valid_sku_ids:
-                raise ValueError(f"skuId '{sku_id}' does not exist in the Enumeration SKU API.")
-            year_month = _parse_year_month_value(normalized.get("yearMonth", ""))
-            demand_lbs = _parse_float_value(normalized.get("demandLbs", ""), "demandLbs")
-            records.append(
-                {
-                    "skuId": sku_id,
-                    "yearMonth": year_month,
-                    "demandLbs": demand_lbs,
-                }
-            )
-        except Exception as exc:
-            errors.append(f"Row {row_idx}: {exc}")
-
-    return records, errors, None
 
 
 def _build_template_csv() -> str:
@@ -294,7 +212,10 @@ if create_clicked:
             _handle_api_error(error, "create monthly contract demand")
 
 st.subheader("CSV Upload")
-st.caption("Upload a CSV with columns skuId or tradeNumber, yearMonth, and demandLbs.")
+st.caption(
+    "Upload a CSV or TSV with either flat rows (skuId, yearMonth, demandLbs) or a wide sheet "
+    "with a SKU column and month headers like Code, Feb-26, Mar-26, ..."
+)
 
 st.download_button(
     "Download CSV Template",
@@ -303,9 +224,13 @@ st.download_button(
     mime="text/csv",
 )
 
-uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+uploaded_file = st.file_uploader("Choose a CSV file", type=["csv", "tsv", "txt"])
 if uploaded_file is not None:
-    parsed_rows, row_errors, parse_error = _parse_csv_payload(uploaded_file, valid_sku_ids)
+    file_contents = uploaded_file.getvalue().decode("utf-8-sig")
+    parsed_rows, row_errors, parse_error = parse_monthly_contract_upload_content(
+        file_contents,
+        valid_sku_ids,
+    )
 
     if parse_error:
         st.error(parse_error)

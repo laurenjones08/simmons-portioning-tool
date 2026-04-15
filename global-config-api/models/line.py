@@ -26,6 +26,12 @@ class LineBase(BaseModel):
         alias="hoursOfLaborAvailablePerShift",
         gt=0,
     )
+    units_available: int = Field(
+        ...,
+        alias="unitsAvailable",
+        ge=0,
+        description="Number of individual cutting units available on the line",
+    )
     line_throughput: Optional[float] = Field(
         None,
         alias="lineThroughput",

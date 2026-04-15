@@ -365,6 +365,10 @@ def _month_strings(months: Sequence[pd.Period]) -> List[str]:
     return [month.strftime("%Y-%m") for month in months]
 
 
+def _date_strings(dates: Sequence[pd.Timestamp]) -> List[str]:
+    return [pd.Timestamp(date).strftime("%Y-%m-%d") for date in dates]
+
+
 def _metric_id(metric: Dict[str, Any]) -> str:
     return _clean_str(metric.get("_id") or metric.get("metricId") or f"{metric.get('mixId')}:{metric.get('bucketId')}")
 
@@ -416,14 +420,24 @@ class SchedulingWorkerDataPrep:
         self.config_api = GlobalConfigApiClient(self.endpoints.global_config_api_url, self.endpoints.timeout_seconds)
         self.enumeration_api = EnumerationApiClient(self.endpoints.enumeration_api_url, self.endpoints.timeout_seconds)
 
-    def load_sources(self) -> DataPrepSources:
+    def load_sources(
+        self,
+        sku_ids: Sequence[str] | None = None,
+        due_dates: Sequence[pd.Timestamp] | None = None,
+    ) -> DataPrepSources:
+        sku_demand_criteria: Dict[str, Any] = {"demandType": "Short"}
+        if sku_ids:
+            sku_demand_criteria["skuIds"] = list(sku_ids)
+        if due_dates:
+            sku_demand_criteria["dueDates"] = _date_strings(due_dates)
+
         return DataPrepSources(
             mixes=self.enumeration_api.list_mixes(),
             buckets=self.enumeration_api.list_buckets(),
             mix_metrics=self.enumeration_api.list_mix_metrics(),
             lines=self.config_api.list_lines(),
             configs=self.config_api.list_configs(),
-            sku_demands=self.scheduling_api.search_sku_demands(),
+            sku_demands=self.scheduling_api.search_sku_demands(sku_demand_criteria),
         )
 
     def _prepare_demo_inputs(self, P: Sequence[str], T: Sequence[pd.Timestamp], week1_dates: Sequence[pd.Timestamp], M: Sequence[pd.Period]) -> Dict[str, Any]:
@@ -799,7 +813,7 @@ class SchedulingWorkerDataPrep:
         M = sorted({d.to_period("M") for d in T})
         month_of_day = {d: d.to_period("M") for d in T}
 
-        sources = self.load_sources()
+        sources = self.load_sources(sku_ids, week1_dates)
         available_wip_rows = self.scheduling_api.search_available_wip({"plantName": plant_id}) if plant_id else self.scheduling_api.search_available_wip()
         selected_metrics = self._select_mix_metrics(sources, sku_ids)
         if not selected_metrics:
@@ -975,5 +989,3 @@ def get_model_inputs(
         plant_id=plant_id,
         sku_ids=sku_ids,
     )
-
-

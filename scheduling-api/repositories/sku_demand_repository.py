@@ -13,6 +13,10 @@ class SKUDemandRepository:
             unique=True,
             name="uniq_sku_demand_key",
         )
+        self.collection.create_index(
+            [("demandType", 1), ("dueDate", 1), ("skuId", 1)],
+            name="idx_sku_demand_type_due_date_sku_id",
+        )
         self.collection.create_index([("skuId", 1)], name="idx_sku_demand_sku_id")
         self.collection.create_index([("demandType", 1)], name="idx_sku_demand_type")
         self.collection.create_index([("dueDate", 1)], name="idx_sku_demand_due_date")
@@ -33,8 +37,25 @@ class SKUDemandRepository:
             raise Exception(f"Database error retrieving SKU demand: {exc}")
 
     def search(self, criteria: Dict[str, Any]) -> List[Dict[str, Any]]:
+        query: Dict[str, Any] = {}
+        sku_ids = criteria.get("skuIds")
+        if sku_ids:
+            query["skuId"] = {"$in": sku_ids}
+        elif criteria.get("skuId"):
+            query["skuId"] = criteria["skuId"]
+
+        demand_type = criteria.get("demandType")
+        if demand_type:
+            query["demandType"] = demand_type
+
+        due_dates = criteria.get("dueDates")
+        if due_dates:
+            query["dueDate"] = {"$in": due_dates}
+        elif criteria.get("dueDate"):
+            query["dueDate"] = criteria["dueDate"]
+
         try:
-            return list(self.collection.find(criteria))
+            return list(self.collection.find(query))
         except PyMongoError as exc:
             raise Exception(f"Database error searching SKU demands: {exc}")
 
