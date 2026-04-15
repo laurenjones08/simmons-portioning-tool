@@ -67,7 +67,7 @@ def apply_theme() -> None:
       margin-left:  -2rem !important;
       margin-right: -2rem !important;
       width: calc(100% + 4rem) !important;
-      min-height: 68px !important;
+      min-height: 82px !important;
       align-items: center !important;
       box-shadow: 0 2px 18px rgba(0,0,0,0.26) !important;
       padding: 0 12px !important;
@@ -79,17 +79,17 @@ def apply_theme() -> None:
       display: flex;
       align-items: center;
       justify-content: flex-start;
-      height: 68px;
+      height: 82px;
       padding-left: 8px;
     }
     .sfy-logo-img {
-      height: 58px;
-      max-width: 260px;
+      height: 62px;
+      max-width: 280px;
       width: auto;
       background: white;
       border-radius: 6px;
       padding: 5px 14px;
-      margin-top: -10px;
+      margin-top: -18px;
     }
     .sfy-logo-text {
       color: white;
@@ -110,8 +110,8 @@ def apply_theme() -> None:
       font-weight: 700 !important;
       letter-spacing: 0.07em !important;
       text-transform: uppercase !important;
-      height: 68px !important;
-      padding: 0 4px !important;
+      height: 82px !important;
+      padding: 0 6px !important;
       width: 100% !important;
       transition: color 0.12s, border-color 0.12s, background 0.12s !important;
     }
@@ -151,6 +151,7 @@ def apply_theme() -> None:
       font-size: 13px;
       margin: 0;
     }
+
 
 
     /* ════════════════════════════════════════════════════════
@@ -232,6 +233,98 @@ def apply_theme() -> None:
       border-radius: 8px;
       overflow: hidden;
       border: 1px solid rgba(16,24,40,0.06);
+    }
+
+    /* ════════════════════════════════════════════════════════
+       WIDGET LIGHT-MODE OVERRIDES
+       (config.toml sets base=light; these add Simmons polish)
+       ════════════════════════════════════════════════════════ */
+
+    /* ── Input focus ring ─────────────────────────────────── */
+    [data-testid="stTextInput"] input:focus,
+    [data-testid="stNumberInput"] input:focus,
+    [data-testid="stTextArea"] textarea:focus {
+      border-color: #0046AD !important;
+      box-shadow: 0 0 0 3px rgba(0,70,173,0.12) !important;
+      outline: none !important;
+    }
+
+    /* ── Selectbox & MultiSelect borders ──────────────────── */
+    [data-baseweb="select"] > div:first-child {
+      background: #ffffff !important;
+      border-color: #d1d5db !important;
+    }
+    [data-baseweb="select"] > div:first-child:focus-within {
+      border-color: #0046AD !important;
+      box-shadow: 0 0 0 3px rgba(0,70,173,0.12) !important;
+    }
+
+    /* ── Dropdown menu popup ──────────────────────────────── */
+    [data-baseweb="popover"] [role="listbox"],
+    [data-baseweb="menu"] ul {
+      background: #ffffff !important;
+      border: 1px solid #d1d5db !important;
+      border-radius: 6px !important;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.10) !important;
+    }
+    [data-baseweb="option"]:hover,
+    [data-baseweb="option"][aria-selected="true"] {
+      background: #e8f0fb !important;
+      color: #0046AD !important;
+    }
+
+    /* ── MultiSelect tags ─────────────────────────────────── */
+    [data-baseweb="tag"] {
+      background: #dde9f8 !important;
+      color: #003478 !important;
+      border-radius: 4px !important;
+    }
+    [data-baseweb="tag"] span { color: #003478 !important; }
+
+    /* ── Slider track & thumb ─────────────────────────────── */
+    [data-testid="stSlider"] [role="slider"] {
+      background: #0046AD !important;
+      border-color: #0046AD !important;
+    }
+
+    /* ── Expander ─────────────────────────────────────────── */
+    [data-testid="stExpander"] {
+      background: #ffffff !important;
+      border: 1px solid rgba(16,24,40,0.08) !important;
+      border-radius: 8px !important;
+    }
+    [data-testid="stExpander"] summary {
+      background: #ffffff !important;
+    }
+
+    /* ── Metric tiles ─────────────────────────────────────── */
+    [data-testid="stMetric"] {
+      background: #ffffff !important;
+      border-radius: 8px !important;
+      padding: 14px 18px !important;
+      border: 1px solid rgba(16,24,40,0.06) !important;
+      box-shadow: 0 2px 6px rgba(16,24,40,0.06) !important;
+    }
+
+    /* ── DataFrames ───────────────────────────────────────── */
+    [data-testid="stDataFrame"] > div {
+      border-radius: 8px !important;
+      overflow: hidden !important;
+    }
+
+    /* ── Info / warning / error banners ───────────────────── */
+    [data-testid="stAlert"] {
+      border-radius: 6px !important;
+    }
+
+    /* ── Native chart wrappers (bar/line/area) ────────────── */
+    [data-testid="stArrowVegaLiteChart"],
+    [data-testid="stVegaLiteChart"] {
+      background: #ffffff !important;
+      border-radius: 8px !important;
+      padding: 12px !important;
+      border: 1px solid rgba(16,24,40,0.06) !important;
+      box-shadow: 0 2px 6px rgba(16,24,40,0.06) !important;
     }
 
     </style>

@@ -50,7 +50,11 @@ def _fmt_dt(val: str) -> str:
 
 def render():
     # ── 1. SNAPSHOT SELECTION ─────────────────────────────────────────────
-    st.subheader("Step 1 — Select Enumeration Snapshot")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:28px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Step 1 — Select Enumeration Snapshot</h3>",
+        unsafe_allow_html=True,
+    )
     st.caption("The scheduling optimizer consumes a completed enumeration snapshot as its input. Select the snapshot you want to schedule against, or navigate to the Enumeration Dashboard to generate one.")
 
     try:
@@ -107,7 +111,11 @@ def render():
     st.markdown("---")
 
     # ── 3. SUBMIT SCHEDULING JOB ──────────────────────────────────────────
-    st.subheader("Step 3 — Submit Scheduling Job")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:36px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Step 3 — Submit Scheduling Job</h3>",
+        unsafe_allow_html=True,
+    )
     st.caption("The scheduling optimizer runs as a background worker job. Configure the planning horizon and submit. Results are persisted to MongoDB once the job completes.")
 
     with st.form("scheduling_run_form"):
@@ -170,7 +178,11 @@ def render():
     st.markdown("---")
 
     # ── 4. JOB STATUS ─────────────────────────────────────────────────────
-    st.subheader("Scheduling Job Status")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:36px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Scheduling Job Status</h3>",
+        unsafe_allow_html=True,
+    )
     _sc1, _sc2 = st.columns([5, 1])
     with _sc2:
         st.button("↻ Refresh", key="sched_refresh_jobs")
@@ -212,7 +224,11 @@ def render():
     st.markdown("---")
 
     # ── 5. SCHEDULING OUTPUTS / DECISIONS ─────────────────────────────────
-    st.subheader("Scheduling Results")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:36px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Scheduling Results</h3>",
+        unsafe_allow_html=True,
+    )
     st.caption("Once a scheduling job completes, its decisions and outputs are stored in the Scheduling API and can be reviewed below.")
 
     res_tab1, res_tab2 = st.tabs(["Scheduling Decisions", "Scheduling Outputs"])

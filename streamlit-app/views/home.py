@@ -19,32 +19,15 @@ def _status_badge(status: str) -> str:
 
 
 def render():
-    # ── DESCRIPTION ───────────────────────────────────────────────────────
+    # ── PLATFORM MODULES ──────────────────────────────────────────────────
     st.markdown(
-        "<div style='padding:0 4px;margin-bottom:18px'>"
-        "<p style='font-size:15px;color:#333;line-height:1.7;margin:0'>"
-        "This platform provides data-driven decision support for poultry portioning and production scheduling "
-        "at Simmons Prepared Foods. Raw chicken breast (WIP) must be portioned into customer-specific products — "
-        "fillets, tenders, nuggets/strips, and trim. Every portioning decision directly impacts <strong>Upgrade</strong>, "
-        "the percentage of raw breast converted into sellable product, which is the plant's primary operational KPI."
-        "<br/><br/>"
-        "The platform digitizes and optimizes this decision process through two integrated models: an "
-        "<strong>Enumeration Engine</strong> that scores every feasible cut combination, and a "
-        "<strong>Scheduling Optimizer</strong> that translates the best combinations into a production schedule "
-        "aligned with customer demand, line capacity, and labor constraints."
-        "</p>"
-        "</div>",
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:28px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Platform Modules</h3>",
         unsafe_allow_html=True,
     )
-
-    st.markdown("---")
-
-    # ── PLATFORM MODULES ──────────────────────────────────────────────────
-    st.subheader("Platform Modules")
     ov1, ov2, ov3 = st.columns(3)
     ov1.markdown(
         "<div class='simmons-card' style='min-height:160px'>"
-        "<div style='font-size:24px;margin-bottom:6px'>🧭</div>"
         "<strong style='font-size:15px'>Enumeration Engine</strong>"
         "<div class='simmons-small' style='margin-top:8px'>"
         "Evaluates every feasible portioning combination against bird-size buckets, "
@@ -56,7 +39,6 @@ def render():
     )
     ov2.markdown(
         "<div class='simmons-card' style='min-height:160px'>"
-        "<div style='font-size:24px;margin-bottom:6px'>📅</div>"
         "<strong style='font-size:15px'>Scheduling Optimizer</strong>"
         "<div class='simmons-small' style='margin-top:8px'>"
         "Ingests enumeration snapshots and solves a production schedule across a "
@@ -68,7 +50,6 @@ def render():
     )
     ov3.markdown(
         "<div class='simmons-card' style='min-height:160px'>"
-        "<div style='font-size:24px;margin-bottom:6px'>📊</div>"
         "<strong style='font-size:15px'>Analytics &amp; Reporting</strong>"
         "<div class='simmons-small' style='margin-top:8px'>"
         "Surfaces upgrade %, trim %, value metrics, and job history across enumeration "
@@ -78,10 +59,12 @@ def render():
         unsafe_allow_html=True,
     )
 
-    st.markdown("---")
-
     # ── RECENT ACTIVITY ───────────────────────────────────────────────────
-    st.subheader("Recent Activity")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:36px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Recent Activity</h3>",
+        unsafe_allow_html=True,
+    )
     ra1, ra2, ra3 = st.columns(3)
 
     with ra1:
@@ -170,17 +153,19 @@ def render():
             unsafe_allow_html=True,
         )
 
-    st.markdown("---")
-
     # ── DOCUMENTATION & RESOURCES ─────────────────────────────────────────
-    st.subheader("Documentation & Resources")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:36px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>Documentation &amp; Resources</h3>",
+        unsafe_allow_html=True,
+    )
     docs = [
-        ("📖", "User Documentation", "Platform user guide and workflow manual.", "http://localhost:3000"),
-        ("🔗", "Git Repository", "Source code, CI pipelines, and version history.", "https://github.com/laurenjones08/simmons-portioning-tool"),
-        ("🚀", "Database Quick Start", "MongoDB bootstrap and common DB operations.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/QUICK_START_DB.md"),
-        ("🧭", "API Gateway", "Local service endpoints and Swagger API docs.", "http://localhost:8080"),
-        ("🐳", "Docker Setup", "Container deployment and environment setup.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/README.md"),
-        ("🔧", "Troubleshooting", "Common issues, error codes, and fixes.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/MICROSERVICE_API_ONBOARDING.md"),
+        ("", "User Documentation", "Platform user guide and workflow manual.", "http://localhost:3000"),
+        ("", "Git Repository", "Source code, CI pipelines, and version history.", "https://github.com/laurenjones08/simmons-portioning-tool"),
+        ("", "Database Quick Start", "MongoDB bootstrap and common DB operations.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/QUICK_START_DB.md"),
+        ("", "Mix Configuration Guide", "Configure plants, bird sizes, and manufacturing line types.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/MIX_CONFIGURATION_GUIDE.md"),
+        ("", "Docker Setup", "Container deployment and environment setup.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/README.md"),
+        ("", "MongoDB Reset Guide", "Force-reinitialize the database to a clean state.", "https://github.com/laurenjones08/simmons-portioning-tool/blob/main/MONGODB_REINITIALIZATION_GUIDE.md"),
     ]
     for row_start in range(0, len(docs), 3):
         doc_cols = st.columns(3)
@@ -190,7 +175,7 @@ def render():
                 icon, title, desc, link = docs[idx]
                 col.markdown(
                     f"<div class='simmons-card' style='min-height:120px'>"
-                    f"<div style='font-size:18px'>{icon} <strong>{title}</strong></div>"
+                    f"<div style='font-size:18px'><strong>{title}</strong></div>"
                     f"<div class='simmons-small' style='margin-top:6px'>{desc}</div>"
                     f"<div style='margin-top:10px'>"
                     f"<a href='{link}' target='_blank'>"
@@ -202,19 +187,23 @@ def render():
     st.markdown("---")
 
     # ── SYSTEM ARCHITECTURE ───────────────────────────────────────────────
-    st.subheader("System Architecture")
+    st.markdown(
+        "<h3 style='color:#0046AD;font-size:20px;font-weight:700;margin:36px 0 18px 0;"
+        "border-left:4px solid #0046AD;padding-left:12px;'>System Architecture</h3>",
+        unsafe_allow_html=True,
+    )
     st.markdown(
         "<div class='simmons-card'>"
         "<div style='display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap'>"
         "<div style='flex:1;min-width:220px'>"
-        "<div style='font-weight:700;margin-bottom:6px'>🐳 Docker Microservices</div>"
+        "<div style='font-weight:700;margin-bottom:6px'>Docker Microservices</div>"
         "<div class='simmons-small'>"
         "All backend services run in isolated Docker containers orchestrated by "
         "<code>docker-compose</code>. Services communicate over an internal Docker network; "
         "the Nginx API Gateway exposes a unified entry point at <code>localhost:8080</code>."
         "</div></div>"
         "<div style='flex:1;min-width:220px'>"
-        "<div style='font-weight:700;margin-bottom:6px'>⚙ API Layer</div>"
+        "<div style='font-weight:700;margin-bottom:6px'>API Layer</div>"
         "<div class='simmons-small'>"
         "· <strong>Enumeration API</strong> — SKUs, buckets, cut strategies, mixes<br/>"
         "· <strong>Enumeration Worker</strong> — background enumeration jobs<br/>"
