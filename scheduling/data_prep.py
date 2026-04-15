@@ -1,4 +1,14 @@
+import json
+import os
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+
 import pandas as pd
+
+
+SCHEDULING_API_URL = os.getenv(
+    "SCHEDULING_API_URL", "http://localhost:8080/api/scheduling"
+)
 
 
 def load_short_term_demand(short_term_file, P, week1_dates, sheet_name=0, start_row=0):
@@ -76,6 +86,59 @@ def build_week1_demand(P, week1_dates, D_short):
     return D_week1
 
 
+def _fetch_monthly_contract_rows():
+    """
+    Load monthly contract demand rows from the scheduling API.
+
+    Returns an empty list when the API is unavailable so the model can still
+    run with zero default demand.
+    """
+    try:
+        payload = json.dumps({}).encode("utf-8")
+        req = urllib_request.Request(
+            f"{SCHEDULING_API_URL}/monthly-contracts/search",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib_request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return data if isinstance(data, list) else []
+    except (urllib_error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return []
+
+
+def _build_monthly_contract_demand(P, M):
+    """
+    Build the SKU/month contract demand map expected by the model.
+    """
+    contract_rows = _fetch_monthly_contract_rows()
+    contract: dict[tuple[str, pd.Period], float] = {}
+
+    for row in contract_rows:
+        sku_id = str(row.get("skuId", "")).strip()
+        year_month = str(row.get("yearMonth", "")).strip()
+        if not sku_id or sku_id not in P or not year_month:
+            continue
+
+        try:
+            month = pd.Period(year_month, freq="M")
+        except (TypeError, ValueError):
+            continue
+
+        if month not in M:
+            continue
+
+        try:
+            demand_lbs = float(row.get("demandLbs", 0.0))
+        except (TypeError, ValueError):
+            continue
+
+        contract[(sku_id, month)] = demand_lbs
+
+    return contract
+
+
 def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon_days=12):
     """
     plan_start_date:
@@ -87,9 +150,10 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         Example: 12 means two Mon-Sat production weeks.
     """
 
-    # --- Sets ---
+    # --- Sets --- SKUs
     P = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
+# mix_metrics API. Pull everything for the skus in the job
     K = [
         "P1_DSI888",
         "P1_DB20",
@@ -102,8 +166,10 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         "pack_DSI884",
     ]
 
+# Lines
     L = ["DSI 888", "DSI 884", "DB20"]
 
+#Buckets
     B = [
         "B 0-390", "B 390-440", "B 440-490", "B 490-540",
         "B 540-590", "B 590-640", "B 640-690", "B 690-1000"
@@ -123,34 +189,10 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     month_of_day = {d: d.to_period("M") for d in T}
 
     # --- Monthly contractual demand keyed by month period ---
-    # Replace these example values with your real monthly contract data
-    monthly_contract = {
-        ("A", pd.Period("2026-01", freq="M")): 3000,
-        ("A", pd.Period("2026-02", freq="M")): 3200,
-        ("B", pd.Period("2026-01", freq="M")): 2200,
-        ("B", pd.Period("2026-02", freq="M")): 2400,
-        ("C", pd.Period("2026-01", freq="M")): 2600,
-        ("C", pd.Period("2026-02", freq="M")): 2700,
-        ("D", pd.Period("2026-01", freq="M")): 2100,
-        ("D", pd.Period("2026-02", freq="M")): 2300,
-        ("E", pd.Period("2026-01", freq="M")): 3400,
-        ("E", pd.Period("2026-02", freq="M")): 3500,
-        ("F", pd.Period("2026-01", freq="M")): 2000,
-        ("F", pd.Period("2026-02", freq="M")): 2150,
-        ("G", pd.Period("2026-01", freq="M")): 3100,
-        ("G", pd.Period("2026-02", freq="M")): 3250,
-        ("H", pd.Period("2026-01", freq="M")): 2500,
-        ("H", pd.Period("2026-02", freq="M")): 2600,
-    }
-
-    # Keep only months actually present in the horizon
-    monthly_contract = {
-        (p, m): v
-        for (p, m), v in monthly_contract.items()
-        if m in M
-    }
+    monthly_contract = _build_monthly_contract_demand(P, M)
 
     # --- Bucket assigned to each decision ---
+    #Mix Bucket assignment -> Mix Metric API
     bucket_of_k = {
         "P1_DSI888": "B 0-390",
         "P1_DB20": "B 0-390",
@@ -164,6 +206,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     }
 
     # --- Line assigned to each decision ---
+    #Mix Line Assignment -> Use MFG Type to assign to a line in the target plant
     line_of_k = {
         "P1_DSI888": "DSI 888",
         "P1_DB20": "DB20",
@@ -177,6 +220,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     }
 
     # --- Base WIP available by bucket ---
+    # Available wip (daily) TODO add SB/BB Deliniation somewhere idk where
     base_wip_by_bucket = {
         "B 0-390": 30468.11,
         "B 390-440": 39254.81,
@@ -212,6 +256,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     )
 
     # --- Yield: how much SKU p comes from decision k ---
+    # Pull from Mix Metric API Unit Plan (SKU, Mix) : % Yield for every mix_metric object
     Y = {
         ("A", "P1_DSI888"): 0.60, ("A", "P1_DB20"): 0.60, ("A", "pack_DSI884"): 0.40,
         ("A", "P2_DSI888"): 0.55, ("A", "P2_DSI884"): 0.55,
@@ -255,6 +300,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     }
 
     # --- Value per lb of decision ---
+    # Value for each mix_metric pulled from mix_metric api
     V = {
         "P1_DSI888": 2.0,
         "P1_DB20": 2.0,
@@ -268,6 +314,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     }
 
     # --- Rate (lbs/hour) ---
+    # Rate for each mix -> pulled from mix API
     R = {
         "P1_DSI888": 100,
         "P1_DB20": 100,
@@ -281,6 +328,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     }
 
     # --- Hours available per line per date ---
+    # Pulled from Line API
     base_hours_by_line = {
         "DSI 888": 8,
         "DSI 884": 8,
@@ -297,6 +345,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     L_delay = {}
 
     # --- Line throughput capacity (lbs/hour) ---
+    # Pulled from Lines API
     line_throughput = {
         "DSI 888": 9000,
         "DSI 884": 3000,

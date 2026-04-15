@@ -240,6 +240,15 @@ db.sku_demands.createIndex({ "demandType": 1 }, { name: "idx_sku_demand_type", b
 db.sku_demands.createIndex({ "dueDate": 1 }, { name: "idx_sku_demand_due_date", background: true });
 print('    ✓ Indexes created for "sku_demands"');
 
+print('\n  Creating "monthly_contracts" collection...');
+db.createCollection('monthly_contracts');
+print('  ✓ Collection "monthly_contracts" created');
+print('\n  Creating indexes for "monthly_contracts" collection...');
+db.monthly_contracts.createIndex({ "skuId": 1, "yearMonth": 1 }, { name: "uniq_sku_year_month", unique: true, background: true });
+db.monthly_contracts.createIndex({ "skuId": 1 }, { name: "idx_monthly_contract_sku_id", background: true });
+db.monthly_contracts.createIndex({ "yearMonth": 1 }, { name: "idx_monthly_contract_year_month", background: true });
+print('    ✓ Indexes created for "monthly_contracts"');
+
 print('\n  Creating "scheduling_decisions" collection...');
 db.createCollection('scheduling_decisions');
 print('  ✓ Collection "scheduling_decisions" created');
@@ -267,6 +276,14 @@ print('\n  Creating indexes for "bucket_usage" collection...');
 db.bucket_usage.createIndex({ "bucketId": 1, "date": 1 }, { name: "uniq_bucket_date", unique: true, background: true });
 db.bucket_usage.createIndex({ "bucketId": 1 }, { name: "idx_bucket_usage_bucket_id", background: true });
 db.bucket_usage.createIndex({ "date": 1 }, { name: "idx_bucket_usage_date", background: true });
+print('\n  Creating "available_wip" collection...');
+db.createCollection('available_wip');
+print('  ✓ Collection "available_wip" created');
+print('\n  Creating indexes for "available_wip" collection...');
+db.available_wip.createIndex({ "plantName": 1, "bucketId": 1 }, { name: "uniq_plant_bucket", unique: true, background: true });
+db.available_wip.createIndex({ "plantName": 1 }, { name: "idx_available_wip_plant_name", background: true });
+db.available_wip.createIndex({ "bucketId": 1 }, { name: "idx_available_wip_bucket_id", background: true });
+print('    ✓ Indexes created for "available_wip"');
 print('    ✓ Indexes created for "bucket_usage"');
 
 print('\n✓ Scheduling database setup complete!');
@@ -418,6 +435,16 @@ db.global_config.insertMany([
         "valueType": "string",
         "description": "Comma-separated list of available manufacturing line types for mix selection",
         "updatedAt": new Date()
+    },
+    {
+        "_id": "scheduling.gamma_value",
+        "key": "scheduling.gamma_value",
+        "value": 0.1,
+        "valueType": "float",
+        "description": "Objective penalty weight for week 1 demand deviation",
+        "updatedAt": new Date(),
+        "minValue": 0.0,
+        "maxValue": 10.0
     }
 ]);
 
@@ -458,8 +485,12 @@ print('  Scheduling decision indexes: ' + db.scheduling_decisions.getIndexes().l
 print('  Scheduling decision documents: ' + db.scheduling_decisions.countDocuments({}));
 print('  Scheduling output indexes: ' + db.scheduling_outputs.getIndexes().length);
 print('  Scheduling output documents: ' + db.scheduling_outputs.countDocuments({}));
+print('  Monthly contract indexes: ' + db.monthly_contracts.getIndexes().length);
+print('  Monthly contract documents: ' + db.monthly_contracts.countDocuments({}));
 print('  Bucket usage indexes: ' + db.bucket_usage.getIndexes().length);
 print('  Bucket usage documents: ' + db.bucket_usage.countDocuments({}));
+print('  Available WIP indexes: ' + db.available_wip.getIndexes().length);
+print('  Available WIP documents: ' + db.available_wip.countDocuments({}));
 
 // Verify config_db
 db = db.getSiblingDB('config_db');

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from bson import ObjectId
 from pydantic import BaseModel, Field
@@ -57,3 +57,25 @@ class SKUDemandSearchCriteria(BaseModel):
         "json_schema_extra": {"example": {"skuId": "50624", "demandType": "Short"}},
     }
 
+
+class SKUDemandBulkImportRequest(BaseModel):
+    demands: List[SKUDemandCreate] = Field(..., alias="demands", min_length=1)
+
+    model_config = {"populate_by_name": True}
+
+
+class SKUDemandBulkImportError(BaseModel):
+    row_index: int = Field(..., alias="rowIndex", ge=1)
+    sku_id: Optional[str] = Field(None, alias="skuId", min_length=1, max_length=100)
+    error: str = Field(..., min_length=1)
+
+    model_config = {"populate_by_name": True}
+
+
+class SKUDemandBulkImportResponse(BaseModel):
+    total: int = Field(..., ge=0)
+    successful: int = Field(..., ge=0)
+    failed: int = Field(..., ge=0)
+    errors: List[SKUDemandBulkImportError] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}

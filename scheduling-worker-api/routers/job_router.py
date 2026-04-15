@@ -7,7 +7,7 @@ from pymongo.database import Database
 
 from database import get_database
 from job_service import JobService
-from models.job import CreateJobRequest, JobStatusResponse
+from models.job import ArtifactFile, CreateJobRequest, JobStatusResponse
 
 router = APIRouter()
 
@@ -21,7 +21,7 @@ def _get_service(db: Database = Depends(get_database)) -> JobService:
     response_model=JobStatusResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Submit a new scheduling job",
-    description="Submits a background scheduling job that runs the optimization pipeline and stores result summaries.",
+    description="Submits a background scheduling job for a single plant and explicit skuIds list, then stores result summaries.",
 )
 async def submit_job(payload: CreateJobRequest, service: JobService = Depends(_get_service)) -> JobStatusResponse:
     try:
@@ -70,3 +70,14 @@ async def cancel_job(job_id: str, service: JobService = Depends(_get_service)) -
         )
     return result
 
+
+@router.get(
+    "/{job_id}/artifacts",
+    response_model=List[ArtifactFile],
+    summary="Get downloadable scheduling artifacts",
+)
+async def get_job_artifacts(job_id: str, service: JobService = Depends(_get_service)) -> List[ArtifactFile]:
+    artifacts = service.get_artifacts(job_id)
+    if artifacts is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return artifacts

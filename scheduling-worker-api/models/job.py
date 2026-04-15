@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from bson import ObjectId
 from pydantic import BaseModel, Field
@@ -20,8 +20,20 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class ArtifactFile(BaseModel):
+    artifact_name: str = Field(..., alias="artifactName")
+    file_name: str = Field(..., alias="fileName")
+    bucket: str = Field(..., alias="bucket")
+    key: str = Field(..., alias="key")
+    download_url: Optional[str] = Field(default=None, alias="downloadUrl")
+
+    model_config = {"populate_by_name": True}
+
+
 class CreateJobRequest(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
+    plant_id: str = Field(..., alias="plantId", min_length=1)
+    sku_ids: List[str] = Field(..., alias="skuIds", min_length=1)
     short_term_file: Optional[str] = Field(None, alias="shortTermFile")
     save_csv: bool = Field(default=False, alias="saveCsv")
     output_dir: str = Field(default="outputs", alias="outputDir")
@@ -34,6 +46,8 @@ class CreateJobRequest(BaseModel):
         "json_schema_extra": {
             "example": {
                 "runId": "schedule-2026-04-10",
+                "plantId": "FSP",
+                "skuIds": ["50624", "50625"],
                 "shortTermFile": None,
                 "saveCsv": False,
                 "outputDir": "outputs",
@@ -61,6 +75,12 @@ class SchedulingJob(BaseModel):
     horizon_days: int = Field(default=12, alias="horizonDays")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
     results_collection: str = Field(default="scheduling_results", alias="resultsCollection")
+    plant_id: str = Field(..., alias="plantId")
+    sku_ids: List[str] = Field(default_factory=list, alias="skuIds")
+    artifact_bucket: Optional[str] = Field(default=None, alias="artifactBucket")
+    artifact_prefix: Optional[str] = Field(default=None, alias="artifactPrefix")
+    artifact_keys: List[str] = Field(default_factory=list, alias="artifactKeys")
+    artifact_files: List[ArtifactFile] = Field(default_factory=list, alias="artifactFiles")
 
     model_config = {
         "populate_by_name": True,
@@ -83,6 +103,12 @@ class JobStatusResponse(BaseModel):
     horizon_days: int = Field(default=12, alias="horizonDays")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
     results_collection: str = Field(default="scheduling_results", alias="resultsCollection")
+    plant_id: str = Field(..., alias="plantId")
+    sku_ids: List[str] = Field(default_factory=list, alias="skuIds")
+    artifact_bucket: Optional[str] = Field(default=None, alias="artifactBucket")
+    artifact_prefix: Optional[str] = Field(default=None, alias="artifactPrefix")
+    artifact_keys: List[str] = Field(default_factory=list, alias="artifactKeys")
+    artifact_files: List[ArtifactFile] = Field(default_factory=list, alias="artifactFiles")
 
     model_config = {"populate_by_name": True}
 
@@ -104,5 +130,10 @@ class JobStatusResponse(BaseModel):
             horizonDays=job.horizon_days,
             errorMessage=job.error_message,
             resultsCollection=job.results_collection,
+            plantId=job.plant_id,
+            skuIds=job.sku_ids,
+            artifactBucket=job.artifact_bucket,
+            artifactPrefix=job.artifact_prefix,
+            artifactKeys=job.artifact_keys,
+            artifactFiles=job.artifact_files,
         )
-

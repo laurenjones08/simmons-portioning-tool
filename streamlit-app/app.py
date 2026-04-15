@@ -12,11 +12,15 @@ Welcome to the **Portioning Tool** management interface.
 
 Use the sidebar to navigate between pages:
 
-- **Buckets** — Manage weight bucket definitions used for enumeration bucketing.
-- **SKUs** — Create, search, update, and delete Stock Keeping Units.
-- **Cut Strategies** — Manage manufacturing cut configurations.
-- **Mix Visualization** — Browse and filter enumeration mix results.
-- **Mix Generation** — Submit and monitor enumeration jobs.
-- **Global Config** — View and edit system configuration parameters.
+- **Buckets** - Manage weight bucket definitions used for enumeration bucketing.
+- **SKUs** - Create, search, update, and delete Stock Keeping Units.
+- **Cut Strategies** - Manage manufacturing cut configurations.
+- **Mix Visualization** - Browse and filter enumeration mix results.
+- **Mix Generation** - Submit and monitor enumeration jobs.
+- **Global Config** - View and edit system configuration parameters.
+- **Available WIP** - Manage plant and bucket level WIP availability for scheduling.
+- **SKU Demand** - Manage plant scheduling demand by SKU with CSV import support.
+- **Monthly Contract Demand** - Manage monthly contract demand by SKU and year-month.
+- **Scheduling Jobs** - Create and monitor plant-scoped scheduling runs.
 """
 )
