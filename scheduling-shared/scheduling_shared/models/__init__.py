@@ -24,12 +24,3 @@ from .scheduling_output import (
     SchedulingOutputSearchCriteria,
     SchedulingOutputUpdate,
 )
-from .sku_demand import (
-    SKUDemand,
-    SKUDemandBulkImportError,
-    SKUDemandBulkImportRequest,
-    SKUDemandBulkImportResponse,
-    SKUDemandCreate,
-    SKUDemandSearchCriteria,
-    SKUDemandUpdate,
-)

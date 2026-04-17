@@ -253,16 +253,6 @@ db = db.getSiblingDB('scheduling_db');
 
 print('  ✓ Database "scheduling_db" created/selected');
 
-print('\n  Creating "sku_demands" collection...');
-ensureCollection('sku_demands');
-print('\n  Creating indexes for "sku_demands" collection...');
-db.sku_demands.createIndex({ "skuId": 1, "demandType": 1, "dueDate": 1 }, { name: "uniq_sku_demand_key", unique: true, background: true });
-db.sku_demands.createIndex({ "demandType": 1, "dueDate": 1, "skuId": 1 }, { name: "idx_sku_demand_type_due_date_sku_id", background: true });
-db.sku_demands.createIndex({ "skuId": 1 }, { name: "idx_sku_demand_sku_id", background: true });
-db.sku_demands.createIndex({ "demandType": 1 }, { name: "idx_sku_demand_type", background: true });
-db.sku_demands.createIndex({ "dueDate": 1 }, { name: "idx_sku_demand_due_date", background: true });
-print('    ✓ Indexes created for "sku_demands"');
-
 print('\n  Creating "monthly_contracts" collection...');
 ensureCollection('monthly_contracts');
 print('\n  Creating indexes for "monthly_contracts" collection...');
@@ -495,8 +485,6 @@ print('  Job status documents: ' + db.job_status.countDocuments({}));
 db = db.getSiblingDB('scheduling_db');
 print('\nscheduling_db:');
 print('  Collections: ' + db.getCollectionNames().join(', '));
-print('  SKU demand indexes: ' + db.sku_demands.getIndexes().length);
-print('  SKU demand documents: ' + db.sku_demands.countDocuments({}));
 print('  Scheduling decision indexes: ' + db.scheduling_decisions.getIndexes().length);
 print('  Scheduling decision documents: ' + db.scheduling_decisions.countDocuments({}));
 print('  Scheduling output indexes: ' + db.scheduling_outputs.getIndexes().length);

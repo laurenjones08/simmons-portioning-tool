@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 from functools import lru_cache
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from config import get_settings
 
@@ -46,6 +47,10 @@ def dataframe_to_csv_bytes(dataframe) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
+def json_to_bytes(payload: Any) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 def upload_csv_artifacts(run_id: str, prefix: str, csv_payloads: Dict[str, bytes]) -> Tuple[str, str, List[str]]:
     settings = get_settings()
     ensure_bucket_exists()
@@ -68,6 +73,33 @@ def upload_csv_artifacts(run_id: str, prefix: str, csv_payloads: Dict[str, bytes
         uploaded_keys.append(key)
 
     return settings.object_store_bucket, key_prefix, uploaded_keys
+
+
+def upload_json_artifact(run_id: str, prefix: str, artifact_name: str, payload: Any) -> Tuple[str, str]:
+    settings = get_settings()
+    ensure_bucket_exists()
+    client = get_s3_client()
+
+    normalized_prefix = prefix.strip("/").replace("\\", "/")
+    key_prefix = f"runs/{run_id}"
+    if normalized_prefix:
+        key_prefix = f"{key_prefix}/{normalized_prefix}"
+
+    key = f"{key_prefix}/{artifact_name}.json"
+    client.put_object(
+        Bucket=settings.object_store_bucket,
+        Key=key,
+        Body=json_to_bytes(payload),
+        ContentType="application/json",
+    )
+    return settings.object_store_bucket, key
+
+
+def fetch_json_artifact(bucket: str, key: str) -> Any:
+    client = get_s3_client()
+    response = client.get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read()
+    return json.loads(body.decode("utf-8"))
 
 
 def build_download_url(bucket: str, key: str) -> str:

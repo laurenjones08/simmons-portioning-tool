@@ -327,6 +327,51 @@ def apply_theme() -> None:
       box-shadow: 0 2px 6px rgba(16,24,40,0.06) !important;
     }
 
+    /* Modal + skeleton states for mix detail */
+    [data-testid="stDialog"] [role="dialog"] {
+      border-radius: 16px !important;
+      border: 1px solid rgba(16,24,40,0.08) !important;
+      box-shadow: 0 24px 80px rgba(0,38,79,0.22) !important;
+    }
+    .simmons-skeleton-shell {
+      display: grid;
+      gap: 16px;
+      margin: 4px 0 8px 0;
+    }
+    .simmons-skeleton-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .simmons-skeleton-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f7faff 100%);
+      border: 1px solid rgba(16,24,40,0.06);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 12px 30px rgba(0,70,173,0.08);
+    }
+    .simmons-skeleton-line {
+      height: 12px;
+      border-radius: 999px;
+      margin-bottom: 12px;
+      background: linear-gradient(90deg, #dbe7f8 0%, #f5f8fd 50%, #dbe7f8 100%);
+      background-size: 200% 100%;
+      animation: simmons-shimmer 1.25s ease-in-out infinite;
+    }
+    .simmons-skeleton-line-title {
+      height: 16px;
+      width: 42%;
+      margin-bottom: 18px;
+    }
+    .simmons-skeleton-line:last-child {
+      margin-bottom: 0;
+      width: 76%;
+    }
+    @keyframes simmons-shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
     </style>
     """
 

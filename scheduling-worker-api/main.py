@@ -44,9 +44,9 @@ app = FastAPI(
 
 Runs the scheduling optimization pipeline in a background job and stores serialized output summaries.
 Each job must include a `plantId` and a `skuIds` list. The worker validates that every SKU belongs
-to the same plant before scheduling. If a `shortTermFile` is provided, the worker persists the short-term
-demand rows into the scheduling API before running the model. When `saveCsv` is enabled, the worker also
-uploads CSV artifacts to the S3-compatible object store.
+to the same plant before scheduling. If a `shortTermFile` is provided, the worker uses it only for that
+run of the model and does not persist the rows. When `saveCsv` is enabled, the worker also uploads CSV
+artifacts to the S3-compatible object store.
 
 ### Collections written
 

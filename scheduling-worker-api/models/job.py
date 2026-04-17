@@ -38,6 +38,7 @@ class CreateJobRequest(BaseModel):
     save_csv: bool = Field(default=False, alias="saveCsv")
     output_dir: str = Field(default="outputs", alias="outputDir")
     tee: bool = Field(default=False)
+    debug_mode: bool = Field(default=False, alias="debugMode")
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays", ge=1)
 
@@ -52,6 +53,7 @@ class CreateJobRequest(BaseModel):
                 "saveCsv": False,
                 "outputDir": "outputs",
                 "tee": False,
+                "debugMode": False,
                 "planStartDate": "2026-01-05",
                 "horizonDays": 12,
             }
@@ -71,6 +73,7 @@ class SchedulingJob(BaseModel):
     save_csv: bool = Field(default=False, alias="saveCsv")
     output_dir: str = Field(default="outputs", alias="outputDir")
     tee: bool = Field(default=False)
+    debug_mode: bool = Field(default=False, alias="debugMode")
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays")
     current_stage: Optional[str] = Field(default=None, alias="currentStage")
@@ -105,6 +108,7 @@ class JobStatusResponse(BaseModel):
     save_csv: bool = Field(default=False, alias="saveCsv")
     output_dir: str = Field(default="outputs", alias="outputDir")
     tee: bool = Field(default=False)
+    debug_mode: bool = Field(default=False, alias="debugMode")
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays")
     current_stage: Optional[str] = Field(default=None, alias="currentStage")
@@ -138,6 +142,7 @@ class JobStatusResponse(BaseModel):
             saveCsv=job.save_csv,
             outputDir=job.output_dir,
             tee=job.tee,
+            debugMode=job.debug_mode,
             planStartDate=job.plan_start_date,
             horizonDays=job.horizon_days,
             currentStage=job.current_stage,

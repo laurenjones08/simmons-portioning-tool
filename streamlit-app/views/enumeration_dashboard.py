@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from statistics import mean
+import time
 
 import pandas as pd
 import streamlit as st
@@ -134,6 +135,233 @@ def _mix_score(metrics: list[dict]) -> dict[str, float | None]:
         "avg_trim": mean(trims) if trims else None,
         "avg_value": mean(values) if values else None,
     }
+
+
+def _mix_flag_labels(mix: dict | None) -> list[str]:
+    if not mix:
+        return []
+
+    flags = []
+    if mix.get("includesFDS"):
+        flags.append("FDS")
+    if mix.get("includesRTL"):
+        flags.append("RTL")
+    if mix.get("includesNug"):
+        flags.append("NUG")
+    return flags
+
+
+def _consume_mix_selection(
+    current_selection: str | None,
+    previous_selection: str | None,
+) -> tuple[str | None, str | None, bool]:
+    next_selection = current_selection
+    if current_selection and current_selection != previous_selection:
+        return next_selection, current_selection, True
+    return next_selection, None, False
+
+
+def _dismiss_mix_detail_modal() -> None:
+    st.session_state["enum_mix_detail_open_id"] = None
+    st.session_state["enum_mix_detail_loading"] = False
+    st.session_state["enum_mix_table_selection"] = None
+
+
+def _build_mix_detail_context(
+    mix_id: str,
+    all_mixes: list[dict],
+    metrics_by_mix: dict[str, list[dict]],
+    all_strategies: dict[str, dict],
+    selected_bucket_id: str | None,
+) -> dict | None:
+    mix_obj = next((mix for mix in all_mixes if str(mix.get("_id", "")) == mix_id), None)
+    if not mix_obj:
+        return None
+
+    mix_metrics = metrics_by_mix.get(mix_id, [])
+    if selected_bucket_id:
+        mix_metrics = [metric for metric in mix_metrics if str(metric.get("bucketId", "")) == selected_bucket_id]
+
+    return {
+        "mix_id": mix_id,
+        "mix": mix_obj,
+        "metrics": mix_metrics,
+        "strategy": all_strategies.get(mix_obj.get("cutStrategyID", ""), {}),
+        "flags": _mix_flag_labels(mix_obj),
+    }
+
+
+def _render_mix_detail_skeleton() -> None:
+    st.markdown(
+        """
+        <div class="simmons-skeleton-shell">
+          <div class="simmons-skeleton-card">
+            <div class="simmons-skeleton-line simmons-skeleton-line-title"></div>
+            <div class="simmons-skeleton-line"></div>
+            <div class="simmons-skeleton-line"></div>
+            <div class="simmons-skeleton-line"></div>
+          </div>
+          <div class="simmons-skeleton-grid">
+            <div class="simmons-skeleton-card">
+              <div class="simmons-skeleton-line simmons-skeleton-line-title"></div>
+              <div class="simmons-skeleton-line"></div>
+              <div class="simmons-skeleton-line"></div>
+              <div class="simmons-skeleton-line"></div>
+            </div>
+            <div class="simmons-skeleton-card">
+              <div class="simmons-skeleton-line simmons-skeleton-line-title"></div>
+              <div class="simmons-skeleton-line"></div>
+              <div class="simmons-skeleton-line"></div>
+              <div class="simmons-skeleton-line"></div>
+              <div class="simmons-skeleton-line"></div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_mix_detail_body(detail_context: dict, bucket_labels: dict[str, str]) -> None:
+    mix_id = detail_context["mix_id"]
+    mix_obj = detail_context["mix"]
+    mix_metrics = detail_context["metrics"]
+    strategy = detail_context["strategy"]
+    flags = detail_context["flags"]
+
+    st.caption(
+        "Review the selected mix configuration, bucket performance, and the best unit plan without leaving the results table."
+    )
+
+    det1, det2, det3 = st.columns([2, 2, 1])
+
+    with det1:
+        st.markdown("**Mix Configuration**")
+        skus_str = _fmt_skus(mix_obj.get("skus", {}))
+        st.markdown(
+            f"<div class='simmons-card'>"
+            f"<table style='width:100%;font-size:13px;border-collapse:collapse'>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>SKUs</td><td><strong>{skus_str}</strong></td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Line Type</td><td>{mix_obj.get('mfgType', '---')}</td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Parts</td><td>{', '.join(strategy.get('parts', []) or ['---'])}</td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Plant</td><td>{mix_obj.get('reqPlant', '---')}</td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Bird Size</td><td>{mix_obj.get('reqBirdSize', '---')}</td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Fillets</td><td>{mix_obj.get('numFillets', '---')} ({mix_obj.get('filletWeight', '---')}g)</td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Belt Speed</td><td>{mix_obj.get('beltSpeed', '---')}</td></tr>"
+            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Flags</td><td>{' '.join(flags) if flags else '---'}</td></tr>"
+            f"</table></div>",
+            unsafe_allow_html=True,
+        )
+
+    with det2:
+        st.markdown("**Bucket Performance**")
+        if mix_metrics:
+            df_mm = pd.DataFrame(mix_metrics).sort_values("upgradePercentage", ascending=False)
+            df_mm["Bucket"] = df_mm["bucketId"].map(lambda value: bucket_labels.get(str(value), "[---, ---]"))
+            show_cols = [
+                col
+                for col in [
+                    "Bucket",
+                    "upgradePercentage",
+                    "trimPercentage",
+                    "totalProductProducedGrams",
+                    "value",
+                ]
+                if col in df_mm.columns
+            ]
+            st.dataframe(
+                df_mm[show_cols].reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                height=220,
+                column_config={
+                    "upgradePercentage": st.column_config.NumberColumn("Upgrade %", format="%.2f%%"),
+                    "trimPercentage": st.column_config.NumberColumn("Trim %", format="%.2f%%"),
+                    "totalProductProducedGrams": st.column_config.NumberColumn("Total Wt (g)", format="%.1f"),
+                    "value": st.column_config.NumberColumn("Value $", format="%.2f"),
+                },
+            )
+        else:
+            st.info("No bucket metrics for this mix.")
+
+    with det3:
+        st.markdown("**KPIs**")
+        if mix_metrics:
+            upgrades_m = [m.get("upgradePercentage") for m in mix_metrics if m.get("upgradePercentage") is not None]
+            trims_m = [m.get("trimPercentage") for m in mix_metrics if m.get("trimPercentage") is not None]
+            st.metric("Buckets", len(mix_metrics))
+            st.metric("Best Upgrade", f"{max(upgrades_m):.1f}%" if upgrades_m else "---")
+            st.metric("Avg Upgrade", f"{mean(upgrades_m):.1f}%" if upgrades_m else "---")
+            st.metric("Avg Trim", f"{mean(trims_m):.1f}%" if trims_m else "---")
+        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+        if st.button("Send to Scheduling", type="primary", key=f"send_to_sched_{mix_id}"):
+            st.session_state["sched_selected_mix_id"] = mix_id
+            _dismiss_mix_detail_modal()
+            try:
+                st.query_params["page"] = "Scheduling Dashboard"
+            except Exception:
+                st.session_state.ui_selected_page = "Scheduling Dashboard"
+                st.session_state.ui_sidebar_nav = "Scheduling Dashboard"
+            st.rerun()
+
+    if mix_metrics:
+        best_metric = max(mix_metrics, key=lambda item: item.get("upgradePercentage") or 0)
+        unit_plan = best_metric.get("unitPlan", [])
+        if unit_plan:
+            best_bucket_label = bucket_labels.get(str(best_metric.get("bucketId", "")), "[---, ---]")
+            st.markdown("**Unit Plan - Best Performing Bucket**")
+            st.caption(
+                f"Bucket {best_bucket_label} | Upgrade: {best_metric.get('upgradePercentage', 0):.2f}% | Trim: {best_metric.get('trimPercentage', 0):.2f}%"
+            )
+            df_plan = pd.DataFrame(unit_plan)
+            plan_cols = [c for c in ["sku", "partCode", "unitsInPlan", "totalWeightInPlan", "pctOfTotal"] if c in df_plan.columns]
+            st.dataframe(
+                df_plan[plan_cols].reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "totalWeightInPlan": st.column_config.NumberColumn("Total Wt (g)", format="%.1f"),
+                    "pctOfTotal": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
+                },
+            )
+
+    export_col, close_col = st.columns([2, 1])
+    with export_col:
+        if mix_metrics:
+            df_export = pd.DataFrame(mix_metrics).sort_values("upgradePercentage", ascending=False)
+            st.download_button(
+                "Export Metrics CSV",
+                data=df_export.to_csv(index=False).encode(),
+                file_name=f"mix-metrics-{mix_id[:8]}.csv",
+                mime="text/csv",
+                key=f"mix_metrics_export_{mix_id}",
+            )
+    with close_col:
+        if st.button("Close", key=f"close_mix_detail_{mix_id}"):
+            _dismiss_mix_detail_modal()
+            st.rerun()
+
+
+if hasattr(st, "dialog"):
+
+    @st.dialog("Mix Detail", width="large", dismissible=True, on_dismiss=_dismiss_mix_detail_modal)
+    def _open_mix_detail_dialog(detail_context: dict, bucket_labels: dict[str, str]) -> None:
+        if st.session_state.get("enum_mix_detail_loading", False):
+            skeleton_placeholder = st.empty()
+            with skeleton_placeholder.container():
+                _render_mix_detail_skeleton()
+            time.sleep(0.15)
+            skeleton_placeholder.empty()
+            st.session_state["enum_mix_detail_loading"] = False
+
+        _render_mix_detail_body(detail_context, bucket_labels)
+
+else:
+
+    def _open_mix_detail_dialog(detail_context: dict, bucket_labels: dict[str, str]) -> None:
+        st.markdown("---")
+        st.markdown("#### Mix Detail")
+        _render_mix_detail_body(detail_context, bucket_labels)
 
 
 def _build_mixes_df(
@@ -326,8 +554,7 @@ def _render_results_section(
             _clear_results_cache()
             st.rerun()
 
-    with st.spinner("Loading mixes and metrics..."):
-        df_mixes = _build_mixes_df(all_mixes, all_strategies, metrics_by_mix, None, bucket_labels)
+    df_mixes = _build_mixes_df(all_mixes, all_strategies, metrics_by_mix, None, bucket_labels)
 
     if not all_mixes:
         st.info("No enumeration results available yet. Submit a job below to generate portioning mixes.")
@@ -571,126 +798,27 @@ def _render_results_section(
     selected_rows = event.selection.rows if event and event.selection else []
     selected_mix_id = df_page.iloc[selected_rows[0]]["_id"] if selected_rows else None
 
-    if selected_mix_id:
-        mix_obj = next((mix for mix in all_mixes if str(mix.get("_id", "")) == selected_mix_id), None)
-        mix_metrics = metrics_by_mix.get(selected_mix_id, [])
-        if selected_bucket_id:
-            mix_metrics = [metric for metric in mix_metrics if str(metric.get("bucketId", "")) == selected_bucket_id]
-        strategy = all_strategies.get(mix_obj.get("cutStrategyID", ""), {}) if mix_obj else {}
+    remembered_selection = st.session_state.get("enum_mix_table_selection")
+    next_selection, mix_to_open, show_loading_state = _consume_mix_selection(selected_mix_id, remembered_selection)
+    st.session_state["enum_mix_table_selection"] = next_selection
 
-        st.markdown("---")
-        st.markdown("#### Mix Detail")
+    if mix_to_open:
+        st.session_state["enum_mix_detail_open_id"] = mix_to_open
+        st.session_state["enum_mix_detail_loading"] = show_loading_state
 
-        det1, det2, det3 = st.columns([2, 2, 1])
-
-        with det1:
-            st.markdown("**Mix Configuration**")
-            if mix_obj:
-                skus_str = _fmt_skus(mix_obj.get("skus", {}))
-                flags = []
-                if mix_obj.get("includesFDS"):
-                    flags.append("FDS")
-                if mix_obj.get("includesRTL"):
-                    flags.append("RTL")
-                if mix_obj.get("includesNug"):
-                    flags.append("NUG")
-                st.markdown(
-                    f"<div class='simmons-card'>"
-                    f"<table style='width:100%;font-size:13px;border-collapse:collapse'>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>SKUs</td><td><strong>{skus_str}</strong></td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Line Type</td><td>{mix_obj.get('mfgType', '—')}</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Parts</td><td>{', '.join(strategy.get('parts', []) or ['—'])}</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Plant</td><td>{mix_obj.get('reqPlant', '—')}</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Bird Size</td><td>{mix_obj.get('reqBirdSize', '—')}</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Fillets</td><td>{mix_obj.get('numFillets', '—')} ({mix_obj.get('filletWeight', '—')}g)</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Belt Speed</td><td>{mix_obj.get('beltSpeed', '—')}</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Flags</td><td>{' '.join(flags) if flags else '—'}</td></tr>"
-                    f"</table></div>",
-                    unsafe_allow_html=True,
-                )
-
-        with det2:
-            st.markdown("**Bucket Performance**")
-            if mix_metrics:
-                df_mm = pd.DataFrame(mix_metrics).sort_values("upgradePercentage", ascending=False)
-                df_mm["Bucket"] = df_mm["bucketId"].map(lambda value: bucket_labels.get(str(value), "[—, —]"))
-                show_cols = [
-                    col
-                    for col in [
-                        "Bucket",
-                        "upgradePercentage",
-                        "trimPercentage",
-                        "totalProductProducedGrams",
-                        "value",
-                    ]
-                    if col in df_mm.columns
-                ]
-                st.dataframe(
-                    df_mm[show_cols].reset_index(drop=True),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=220,
-                    column_config={
-                        "upgradePercentage": st.column_config.NumberColumn("Upgrade %", format="%.2f%%"),
-                        "trimPercentage": st.column_config.NumberColumn("Trim %", format="%.2f%%"),
-                        "totalProductProducedGrams": st.column_config.NumberColumn("Total Wt (g)", format="%.1f"),
-                        "value": st.column_config.NumberColumn("Value $", format="%.2f"),
-                    },
-                )
-            else:
-                st.info("No bucket metrics for this mix.")
-
-        with det3:
-            st.markdown("**KPIs**")
-            if mix_metrics:
-                upgrades_m = [m.get("upgradePercentage") for m in mix_metrics if m.get("upgradePercentage") is not None]
-                trims_m = [m.get("trimPercentage") for m in mix_metrics if m.get("trimPercentage") is not None]
-                st.metric("Buckets", len(mix_metrics))
-                st.metric("Best Upgrade", f"{max(upgrades_m):.1f}%" if upgrades_m else "—")
-                st.metric("Avg Upgrade", f"{mean(upgrades_m):.1f}%" if upgrades_m else "—")
-                st.metric("Avg Trim", f"{mean(trims_m):.1f}%" if trims_m else "—")
-            st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
-            if st.button("→ Send to Scheduling", type="primary", key="send_to_sched"):
-                st.session_state["sched_selected_mix_id"] = selected_mix_id
-                try:
-                    st.query_params["page"] = "Scheduling Dashboard"
-                except Exception:
-                    st.session_state.ui_selected_page = "Scheduling Dashboard"
-                    st.session_state.ui_sidebar_nav = "Scheduling Dashboard"
-
-        if mix_metrics:
-            best_metric = max(mix_metrics, key=lambda item: item.get("upgradePercentage") or 0)
-            unit_plan = best_metric.get("unitPlan", [])
-            if unit_plan:
-                best_bucket_label = bucket_labels.get(str(best_metric.get("bucketId", "")), "[—, —]")
-                st.markdown("**Unit Plan - Best Performing Bucket**")
-                st.caption(
-                    f"Bucket {best_bucket_label} | Upgrade: {best_metric.get('upgradePercentage', 0):.2f}% | Trim: {best_metric.get('trimPercentage', 0):.2f}%"
-                )
-                df_plan = pd.DataFrame(unit_plan)
-                plan_cols = [c for c in ["sku", "partCode", "unitsInPlan", "totalWeightInPlan", "pctOfTotal"] if c in df_plan.columns]
-                st.dataframe(
-                    df_plan[plan_cols].reset_index(drop=True),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "totalWeightInPlan": st.column_config.NumberColumn("Total Wt (g)", format="%.1f"),
-                        "pctOfTotal": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
-                    },
-                )
-
-        export_col, _ = st.columns([2, 4])
-        with export_col:
-            if mix_metrics:
-                df_export = pd.DataFrame(mix_metrics).sort_values("upgradePercentage", ascending=False)
-                st.download_button(
-                    "⬇ Export Metrics CSV",
-                    data=df_export.to_csv(index=False).encode(),
-                    file_name=f"mix-metrics-{selected_mix_id[:8]}.csv",
-                    mime="text/csv",
-                )
-    else:
-        st.caption("Click any row above to inspect its bucket-level metrics and unit plan.")
+    open_mix_id = st.session_state.get("enum_mix_detail_open_id")
+    if open_mix_id:
+        detail_context = _build_mix_detail_context(
+            open_mix_id,
+            all_mixes,
+            metrics_by_mix,
+            all_strategies,
+            selected_bucket_id,
+        )
+        if detail_context:
+            _open_mix_detail_dialog(detail_context, bucket_labels)
+        else:
+            _dismiss_mix_detail_modal()
 
     return df_mixes, metrics_by_mix, selected_bucket_id, bucket_labels
 
