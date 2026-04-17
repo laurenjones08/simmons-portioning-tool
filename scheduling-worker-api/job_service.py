@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -17,17 +16,14 @@ from bson import ObjectId
 from pymongo.database import Database
 
 from config import get_settings
-from data_prep import ApiEndpoints, SchedulingApiClient, extract_short_term_demand_records
+from data_prep import ApiEndpoints, SchedulingApiClient
 from models.job import ArtifactFile, CreateJobRequest, JobStatus, JobStatusResponse
 from repositories.job_repository import JobRepository
 from storage import (
     build_download_url,
+    delete_object,
     dataframe_to_csv_bytes,
-<<<<<<< claude/great-mcnulty-8b5c93
-    download_object_bytes,
-    fetch_json_artifact,
-=======
->>>>>>> main
+    upload_short_term_demand_file,
     upload_csv_artifacts,
 )
 
@@ -161,43 +157,6 @@ def _validate_job_skus(plant_id: str, sku_ids: List[str]) -> List[str]:
     return normalized_ids
 
 
-def _save_short_term_demands(request: CreateJobRequest) -> Optional[Dict[str, Any]]:
-    if not request.short_term_file:
-        return None
-
-    short_term_file_value = request.short_term_file
-
-    if not short_term_file_value.startswith("/"):
-        # MinIO object key — download to a temp file
-        file_bytes = download_object_bytes(short_term_file_value)
-        suffix = Path(short_term_file_value).suffix or ".csv"
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        tmp.write(file_bytes)
-        tmp.close()
-        path = Path(tmp.name)
-    else:
-        path = Path(short_term_file_value)
-        if not path.exists():
-            raise ValueError(f"Short-term demand file not found: {short_term_file_value}")
-
-    records = extract_short_term_demand_records(path, request.sku_ids)
-    if not records:
-        logger.info("No short-term demand rows matched for job %s", request.run_id)
-        return {"total": 0, "successful": 0, "failed": 0, "errors": []}
-
-    endpoints = ApiEndpoints()
-    client = SchedulingApiClient(endpoints.scheduling_api_url, endpoints.timeout_seconds)
-    response = client.bulk_create_sku_demands(records)
-
-    total = int(response.get("total", len(records)))
-    successful = int(response.get("successful", 0))
-    failed = int(response.get("failed", max(0, total - successful)))
-    errors = response.get("errors", []) or []
-
-    logger.info("Saved %s short-term demand rows for job %s", successful, request.run_id)
-    return {"total": total, "successful": successful, "failed": failed, "errors": errors}
-
-
 def _get_rate(inputs: Dict[str, Any], k: str) -> float:
     R = inputs.get("R", {})
     return float(R.get(k, R.get(str(k), 0.0)) or 0.0)
@@ -322,10 +281,27 @@ def _persist_results_to_scheduling_api(results: Dict[str, Any], request: "Create
     return summary
 
 
+def _stage_short_term_file_for_job(request: CreateJobRequest) -> Optional[str]:
+    if not request.short_term_file:
+        return None
+
+    short_term_path = Path(request.short_term_file)
+    if not short_term_path.exists():
+        return None
+
+    file_bytes = short_term_path.read_bytes()
+    suffix = short_term_path.suffix or ".csv"
+    key = upload_short_term_demand_file(file_bytes, suffix)
+    logger.info("Uploaded short-term demand file for job %s to object store key %s", request.run_id, key)
+    request.short_term_file = key
+    return key
+
+
 def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> None:
     global _active_job_id
     repo = JobRepository(db)
     job_started = time.perf_counter()
+    staged_short_term_key: Optional[str] = None
 
     def progress_callback(stage: str, message: Optional[str] = None, details: Optional[Dict[str, Any]] = None) -> None:
         detail_payload = dict(details or {})
@@ -354,8 +330,7 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
     try:
         repo.mark_running(job_id)
         _ensure_scheduling_path()
-        progress_callback("short_term_demand", "Saving short-term demand file rows, if provided.")
-        _save_short_term_demands(request)
+        staged_short_term_key = _stage_short_term_file_for_job(request)
         from run_model import run_for_job  # type: ignore
 
         results = run_for_job(
@@ -453,6 +428,17 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         logger.exception("Scheduling job %s failed: %s", job_id, exc)
         repo.mark_failed(job_id, _truncate_error_message(str(exc)), error_traceback)
     finally:
+        if staged_short_term_key:
+            try:
+                delete_object(staged_short_term_key)
+                logger.info("Deleted short-term demand object for job %s: %s", request.run_id, staged_short_term_key)
+            except Exception:
+                logger.warning(
+                    "Failed to delete short-term demand object for job %s: %s",
+                    request.run_id,
+                    staged_short_term_key,
+                    exc_info=True,
+                )
         _active_job_id = None
 
 

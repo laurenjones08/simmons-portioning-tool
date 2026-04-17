@@ -12,13 +12,12 @@ settings.json
 *.pyc
 /streamlit-app/.hypothesis/
 *.pyc
-<<<<<<< copilot/create-integration-tests
 
 # Python packaging artifacts
 /*.egg-info/
 /**/*.egg-info/
-=======
 /scripts/outputs
 /outputs
->>>>>>> main
-/scheduling-worker-api/outputs/
+scheduling-worker-api/.short-term-inputs/schedule-test-20260417-163010-short-term-demand.csv
+/scheduling-worker-api/.short-term-inputs
+/scheduling-worker-api/outputs

@@ -19,6 +19,7 @@ param(
 $ErrorActionPreference = "Stop"
 $script:TranscriptStarted = $false
 $script:ExitCode = 0
+$script:StagedShortTermHostPath = $null
 
 function Write-Info([string]$Message) {
     Write-Host "[info] $Message"
@@ -145,6 +146,80 @@ function Save-JobArtifacts {
     }
 }
 
+function Resolve-InputPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$PathValue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return ""
+    }
+
+    if ([System.IO.Path]::IsPathRooted($PathValue)) {
+        return [System.IO.Path]::GetFullPath($PathValue)
+    }
+
+    $candidateFromCurrent = Join-Path (Get-Location) $PathValue
+    if (Test-Path -LiteralPath $candidateFromCurrent) {
+        return [System.IO.Path]::GetFullPath($candidateFromCurrent)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $repoRoot $PathValue))
+}
+
+function Stage-ShortTermDemandFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$RunLabel
+    )
+
+    $resolvedSourcePath = Resolve-InputPath -PathValue $SourcePath
+    if (-not (Test-Path -LiteralPath $resolvedSourcePath)) {
+        throw "Short-term demand file not found: $resolvedSourcePath"
+    }
+
+    $rows = Import-Csv -LiteralPath $resolvedSourcePath
+    if (-not $rows) {
+        throw "Short-term demand file was empty: $resolvedSourcePath"
+    }
+
+    $normalizedRows = foreach ($row in $rows) {
+        $sku = [string]$row.sku
+        $date = [string]$row.date
+        $qty = $row.qty
+
+        if ([string]::IsNullOrWhiteSpace($sku) -or [string]::IsNullOrWhiteSpace($date) -or [string]::IsNullOrWhiteSpace([string]$qty)) {
+            continue
+        }
+
+        $parsedDate = [datetime]::Parse($date)
+        $parsedQty = [double]$qty
+
+        [pscustomobject]@{
+            sku     = $sku.Trim()
+            dueDate = $parsedDate.ToString("yyyy-MM-dd")
+            demand  = $parsedQty
+            type    = "Short"
+        }
+    }
+
+    if (-not $normalizedRows) {
+        throw "Short-term demand file did not contain any valid rows after reading sku, date, and qty columns."
+    }
+
+    $stageDir = Join-Path $repoRoot "scheduling-worker-api\\.short-term-inputs"
+    New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+    $stagedFileName = "$RunLabel-short-term-demand.csv"
+    $stagedHostPath = Join-Path $stageDir $stagedFileName
+    $normalizedRows | Export-Csv -LiteralPath $stagedHostPath -NoTypeInformation
+
+    return @{
+        HostPath = $stagedHostPath
+        ContainerPath = "/app/.short-term-inputs/$stagedFileName"
+        RowCount = @($normalizedRows).Count
+    }
+}
+
 function Get-RandomSkuIdsForPlant {
     param(
         [Parameter(Mandatory = $true)][string]$ApiUrl,
@@ -208,6 +283,15 @@ Start-Transcript -Path $logPath -Force | Out-Null
 $script:TranscriptStarted = $true
 Write-Info "Capturing script output to $logPath"
 
+$resolvedShortTermFile = $null
+if (-not [string]::IsNullOrWhiteSpace($ShortTermFile)) {
+    $stagedShortTerm = Stage-ShortTermDemandFile -SourcePath $ShortTermFile -RunLabel $RunId
+    $resolvedShortTermFile = [string]$stagedShortTerm.ContainerPath
+    $script:StagedShortTermHostPath = [string]$stagedShortTerm.HostPath
+    Write-Info "Staged $($stagedShortTerm.RowCount) short-term demand rows to $($stagedShortTerm.HostPath)"
+    Write-Info "Worker will read short-term demand file from $resolvedShortTermFile"
+}
+
 if (-not $SkuIds -or $SkuIds.Count -eq 0) {
     Write-Info "No SKU IDs provided; selecting $RandomSkuCount random SKUs for plant $PlantId from $EnumerationApiUrl"
     $SkuIds = Get-RandomSkuIdsForPlant -ApiUrl $EnumerationApiUrl -TargetPlantId $PlantId -Count $RandomSkuCount
@@ -217,7 +301,7 @@ $payload = [ordered]@{
     runId = $RunId
     plantId = $PlantId
     skuIds = @($SkuIds)
-    shortTermFile = $(if ([string]::IsNullOrWhiteSpace($ShortTermFile)) { $null } else { $ShortTermFile })
+    shortTermFile = $resolvedShortTermFile
     saveCsv = [bool]$SaveCsv.IsPresent
     outputDir = $OutputDir
     tee = [bool]$Tee.IsPresent
@@ -275,6 +359,11 @@ if ($state -eq "failed") {
     Write-Host ""
     Write-Host "Job finished successfully."
     Save-JobArtifacts -ApiBaseUrl $SchedulingApiUrl -JobId $jobId -RunLabel $RunId
+}
+
+if ($script:StagedShortTermHostPath -and (Test-Path -LiteralPath $script:StagedShortTermHostPath)) {
+    Remove-Item -LiteralPath $script:StagedShortTermHostPath -Force
+    Write-Info "Deleted staged short-term demand file $script:StagedShortTermHostPath"
 }
 
 if ($script:TranscriptStarted) {

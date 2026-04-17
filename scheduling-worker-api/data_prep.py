@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import random
@@ -13,6 +14,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from urllib import error, request
 
 import pandas as pd
+from storage import download_object_bytes
 
 
 # -----------------------------------------------------------------------------
@@ -93,6 +95,9 @@ class BaseApiClient:
 
 
 class SchedulingApiClient(BaseApiClient):
+    def search_sku_demands(self, criteria: Optional[dict] = None) -> List[dict]:
+        return self._request_json("/sku-demands/search", method="POST", payload=criteria or {}) or []
+
     def search_available_wip(self, criteria: Optional[dict] = None) -> List[dict]:
         return self._request_json("/available-wip/search", method="POST", payload=criteria or {}) or []
 
@@ -607,6 +612,21 @@ def _load_short_term_demand_frame(short_term_file: Path) -> pd.DataFrame:
     return pd.read_excel(short_term_file, sheet_name=0)
 
 
+def _load_short_term_demand_frame_from_bytes(file_bytes: bytes, suffix: str) -> pd.DataFrame:
+    normalized_suffix = suffix.lower()
+    if normalized_suffix in {".csv", ".tsv", ".txt", ""}:
+        if normalized_suffix == ".tsv":
+            return pd.read_csv(io.BytesIO(file_bytes), sep="\t")
+        raw = file_bytes[:4096].decode("utf-8", errors="replace")
+        try:
+            dialect = csv.Sniffer().sniff(raw, delimiters=",\t|;")
+            separator = dialect.delimiter
+        except csv.Error:
+            separator = ","
+        return pd.read_csv(io.BytesIO(file_bytes), sep=separator)
+    return pd.read_excel(io.BytesIO(file_bytes), sheet_name=0)
+
+
 def extract_short_term_demand_records(
     short_term_file: Path,
     P: Sequence[str],
@@ -615,6 +635,16 @@ def extract_short_term_demand_records(
     """Return normalized short-term demand rows from a flat demand file."""
 
     df = _load_short_term_demand_frame(short_term_file)
+    return extract_short_term_demand_records_from_frame(df, P, allowed_due_dates)
+
+
+def extract_short_term_demand_records_from_frame(
+    df: pd.DataFrame,
+    P: Sequence[str],
+    allowed_due_dates: Optional[Sequence[pd.Timestamp]] = None,
+) -> List[Dict[str, Any]]:
+    """Return normalized short-term demand rows from an already loaded frame."""
+
     if df.empty:
         return []
 
@@ -863,6 +893,23 @@ class SchedulingWorkerDataPrep:
             path = Path(short_term_file)
             if path.exists():
                 return load_short_term_demand_from_table(path, parts, week1_dates)
+            records = extract_short_term_demand_records_from_frame(
+                _load_short_term_demand_frame_from_bytes(
+                    download_object_bytes(short_term_file),
+                    Path(short_term_file).suffix,
+                ),
+                parts,
+                week1_dates,
+            )
+            demand: Dict[tuple[str, pd.Timestamp], float] = {}
+            for record in records:
+                sku = _clean_str(record.get("skuId"))
+                due_date = _as_date(record.get("dueDate"))
+                amount = _safe_float(record.get("demandValue"))
+                if not sku or due_date is None or amount is None:
+                    continue
+                demand[(sku, due_date)] = demand.get((sku, due_date), 0.0) + amount
+            return demand
 
         return {}
 
