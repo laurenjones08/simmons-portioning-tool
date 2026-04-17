@@ -109,3 +109,27 @@ def build_download_url(bucket: str, key: str) -> str:
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=60 * 60 * 24,
     )
+
+
+def upload_short_term_demand_file(file_bytes: bytes, suffix: str) -> str:
+    from uuid import uuid4
+
+    settings = get_settings()
+    ensure_bucket_exists()
+    client = get_s3_client()
+    key = f"short-term-uploads/{uuid4().hex}{suffix}"
+    content_type = "text/csv" if suffix in {".csv", ".tsv", ".txt"} else "application/octet-stream"
+    client.put_object(
+        Bucket=settings.object_store_bucket,
+        Key=key,
+        Body=file_bytes,
+        ContentType=content_type,
+    )
+    return key
+
+
+def download_object_bytes(key: str) -> bytes:
+    settings = get_settings()
+    client = get_s3_client()
+    response = client.get_object(Bucket=settings.object_store_bucket, Key=key)
+    return response["Body"].read()

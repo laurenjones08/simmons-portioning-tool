@@ -355,6 +355,18 @@ def cancel_scheduling_job(job_id: str) -> dict:
     return resp.json()
 
 
+def upload_scheduling_short_term_file(file_bytes: bytes, filename: str) -> str:
+    """Upload short-term demand file to MinIO via worker API. Returns the object key."""
+    import requests as _requests
+    resp = _requests.post(
+        f"{SCHEDULING_WORKER_API_URL}/uploads/short-term-file",
+        files={"file": (filename, file_bytes)},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["objectKey"]
+
+
 # ---------------------------------------------------------------------------
 # Available WIP  (Scheduling API)
 # ---------------------------------------------------------------------------
