@@ -1,67 +1,54 @@
 import pandas as pd
 
 
-def load_short_term_demand(short_term_file, P, week1_dates, sheet_name=0, start_row=0):
+def load_short_term_demand(file_path):
     """
-    Reads short-term demand from a block-formatted Excel file.
+    Reads short-term demand from an Excel file with columns:
+        A = SKU
+        B = DueDate
+        C = Qty
 
-    Layout:
-        D:H   = Monday
-        I:M   = Tuesday
-        N:R   = Wednesday
-        S:W   = Thursday
-        X:AB  = Friday
-        AC:AG = Saturday
-
-    Within each day block:
-        1st column = SKU
-        3rd column = Demand
-
-    Notes:
-    - Demand only exists Monday through Saturday
-    - Repeated SKU entries within the same day are summed
-    - week1_dates must contain 6 production dates in Monday-Saturday order
+    Returns:
+        {
+            "P": list of SKUs found in file,
+            "T": list of due dates found in file,
+            "D": demand dictionary keyed by (SKU, DueDate)
+        }
     """
-    if short_term_file is None:
-        return {}
+    df = pd.read_excel(file_path)
 
-    df = pd.read_excel(short_term_file, sheet_name=sheet_name, header=None)
+    # Clean column names
+    df.columns = [str(col).strip() for col in df.columns]
 
-    if start_row > 0:
-        df = df.iloc[start_row:].reset_index(drop=True)
+    # Force first three columns into expected names
+    df = df.iloc[:, :3].copy()
+    df.columns = ["SKU", "DueDate", "Qty"]
 
-    # Map the 6 spreadsheet day blocks to the 6 real dates in week 1
-    date_column_map = {
-        week1_dates[0]: {"sku_col": 3, "demand_col": 5},    # Monday
-        week1_dates[1]: {"sku_col": 8, "demand_col": 10},   # Tuesday
-        week1_dates[2]: {"sku_col": 13, "demand_col": 15},  # Wednesday
-        week1_dates[3]: {"sku_col": 18, "demand_col": 20},  # Thursday
-        week1_dates[4]: {"sku_col": 23, "demand_col": 25},  # Friday
-        week1_dates[5]: {"sku_col": 28, "demand_col": 30},  # Saturday
-    }
+    # Clean values
+    df["SKU"] = df["SKU"].astype(str).str.strip()
+    df["DueDate"] = pd.to_datetime(df["DueDate"])
+    df["Qty"] = pd.to_numeric(df["Qty"], errors="coerce").fillna(0.0)
 
-    D_short = {}
+    # Sort for consistency
+    df = df.sort_values(by=["SKU", "DueDate"]).reset_index(drop=True)
 
+    # Build sets
+    P = sorted(df["SKU"].unique())
+    T = sorted(df["DueDate"].unique())
+
+    # Build demand dictionary
+    D = {}
     for _, row in df.iterrows():
-        for d, cols in date_column_map.items():
-            raw_sku = row.iloc[cols["sku_col"]]
-            raw_demand = row.iloc[cols["demand_col"]]
+        p = row["SKU"]
+        t = row["DueDate"]
+        qty = float(row["Qty"])
+        D[(p, t)] = D.get((p, t), 0.0) + qty
 
-            if pd.isna(raw_sku) or pd.isna(raw_demand):
-                continue
-
-            sku = str(raw_sku).strip()
-            if sku == "" or sku not in P:
-                continue
-
-            try:
-                demand = float(raw_demand)
-            except (TypeError, ValueError):
-                continue
-
-            D_short[(sku, d)] = D_short.get((sku, d), 0.0) + demand
-
-    return D_short
+    return {
+        "P": P,
+        "T": T,
+        "D": D,
+    }
 
 
 def build_week1_demand(P, week1_dates, D_short):
@@ -228,14 +215,19 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         for d in T
     }
 
-    # --- Load short-term demand from weekly Excel file ---
-    D_short = load_short_term_demand(
-        short_term_file=short_term_file,
-        P=P,
-        week1_dates=week1_dates,
-        sheet_name=0,
-        start_row=0,
-    )
+    # --- Load short-term demand from Excel file ---
+    if short_term_file is not None:
+        short_data = load_short_term_demand(short_term_file)
+        D_short = short_data["D"]
+
+        # Optional safety filter: only keep dates in week 1 horizon
+        D_short = {
+            (p, d): qty
+            for (p, d), qty in D_short.items()
+            if d in week1_dates and p in P
+        }
+    else:
+        D_short = {}
 
     # --- Week 1 demand only ---
     D_week1 = build_week1_demand(
