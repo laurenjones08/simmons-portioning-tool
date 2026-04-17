@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -16,11 +17,17 @@ from bson import ObjectId
 from pymongo.database import Database
 
 from config import get_settings
+from data_prep import ApiEndpoints, SchedulingApiClient, extract_short_term_demand_records
 from models.job import ArtifactFile, CreateJobRequest, JobStatus, JobStatusResponse
 from repositories.job_repository import JobRepository
 from storage import (
     build_download_url,
     dataframe_to_csv_bytes,
+<<<<<<< claude/great-mcnulty-8b5c93
+    download_object_bytes,
+    fetch_json_artifact,
+=======
+>>>>>>> main
     upload_csv_artifacts,
 )
 
@@ -154,6 +161,167 @@ def _validate_job_skus(plant_id: str, sku_ids: List[str]) -> List[str]:
     return normalized_ids
 
 
+def _save_short_term_demands(request: CreateJobRequest) -> Optional[Dict[str, Any]]:
+    if not request.short_term_file:
+        return None
+
+    short_term_file_value = request.short_term_file
+
+    if not short_term_file_value.startswith("/"):
+        # MinIO object key — download to a temp file
+        file_bytes = download_object_bytes(short_term_file_value)
+        suffix = Path(short_term_file_value).suffix or ".csv"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.write(file_bytes)
+        tmp.close()
+        path = Path(tmp.name)
+    else:
+        path = Path(short_term_file_value)
+        if not path.exists():
+            raise ValueError(f"Short-term demand file not found: {short_term_file_value}")
+
+    records = extract_short_term_demand_records(path, request.sku_ids)
+    if not records:
+        logger.info("No short-term demand rows matched for job %s", request.run_id)
+        return {"total": 0, "successful": 0, "failed": 0, "errors": []}
+
+    endpoints = ApiEndpoints()
+    client = SchedulingApiClient(endpoints.scheduling_api_url, endpoints.timeout_seconds)
+    response = client.bulk_create_sku_demands(records)
+
+    total = int(response.get("total", len(records)))
+    successful = int(response.get("successful", 0))
+    failed = int(response.get("failed", max(0, total - successful)))
+    errors = response.get("errors", []) or []
+
+    logger.info("Saved %s short-term demand rows for job %s", successful, request.run_id)
+    return {"total": total, "successful": successful, "failed": failed, "errors": errors}
+
+
+def _get_rate(inputs: Dict[str, Any], k: str) -> float:
+    R = inputs.get("R", {})
+    return float(R.get(k, R.get(str(k), 0.0)) or 0.0)
+
+
+def _get_yield(inputs: Dict[str, Any], p: str, k: str) -> float:
+    Y = inputs.get("Y", {})
+    val = Y.get((p, k), Y.get((str(p), str(k)), Y.get((p, str(k)), Y.get((str(p), k), 0.0))))
+    return float(val or 0.0)
+
+
+def _get_week1_demand(inputs: Dict[str, Any], p: str, t: Any) -> float:
+    D = inputs.get("D_week1", {})
+    val = D.get((p, t), D.get((str(p), t), D.get((p, str(t)), D.get((str(p), str(t)), 0.0))))
+    return float(val or 0.0)
+
+
+def _persist_results_to_scheduling_api(results: Dict[str, Any], request: "CreateJobRequest") -> Dict[str, Any]:
+    endpoints = ApiEndpoints()
+    client = SchedulingApiClient(endpoints.scheduling_api_url, endpoints.timeout_seconds)
+
+    outputs = results.get("outputs", {})
+    inputs = results.get("inputs", {})
+
+    decision_df = outputs.get("x_long_nonzero")
+    bucket_df = outputs.get("bucket_usage_by_date")
+
+    summary: Dict[str, Any] = {}
+
+    # ── Scheduling Decisions ──────────────────────────────────────────────────
+    decision_items = []
+    decision_dates: List[str] = []
+    decision_id_map: Dict[tuple, str] = {}
+
+    if decision_df is not None and not decision_df.empty:
+        decision_dates = list(decision_df["date"].unique())
+        P_set = list(inputs.get("P", []))
+
+        for _, row in decision_df.iterrows():
+            k = str(row["decision"])
+            date_str = str(row["date"])
+            assigned_lbs = float(row["assigned_lbs"])
+            rate = _get_rate(inputs, k)
+            duration = round(assigned_lbs / rate, 4) if rate > 0 else 0.0
+            decision_items.append({
+                "mixId": k,
+                "lineId": str(row["line"]),
+                "date": date_str,
+                "lbsProduced": assigned_lbs,
+                "duration": duration,
+            })
+
+        decision_result = client.bulk_create_decisions({
+            "clearDates": decision_dates,
+            "items": decision_items,
+        })
+        summary["decisions"] = {
+            "total": decision_result.get("total", 0),
+            "successful": decision_result.get("successful", 0),
+            "failed": decision_result.get("failed", 0),
+        }
+
+        for created in decision_result.get("items", []):
+            key = (str(created.get("mixId", "")), str(created.get("lineId", "")), str(created.get("date", "")))
+            decision_id_map[key] = str(created.get("_id", ""))
+
+        # ── Scheduling Outputs ────────────────────────────────────────────────
+        output_items = []
+        for _, row in decision_df.iterrows():
+            k = str(row["decision"])
+            date_str = str(row["date"])
+            assigned_lbs = float(row["assigned_lbs"])
+            decision_id = decision_id_map.get((k, str(row["line"]), date_str), "")
+            if not decision_id:
+                continue
+            for p in P_set:
+                y = _get_yield(inputs, str(p), k)
+                if y <= 0:
+                    continue
+                lbs_produced = round(assigned_lbs * y, 3)
+                contract_lbs = round(_get_week1_demand(inputs, str(p), row["date"]), 3)
+                output_items.append({
+                    "decisionId": decision_id,
+                    "skuId": str(p),
+                    "lbsProduced": lbs_produced,
+                    "contractLbs": contract_lbs,
+                    "date": date_str,
+                })
+
+        output_result = client.bulk_create_outputs({
+            "clearDates": decision_dates,
+            "items": output_items,
+        })
+        summary["outputs"] = {
+            "total": output_result.get("total", 0),
+            "successful": output_result.get("successful", 0),
+            "failed": output_result.get("failed", 0),
+        }
+
+    # ── Bucket Usage ──────────────────────────────────────────────────────────
+    if bucket_df is not None and not bucket_df.empty:
+        bucket_dates = list(bucket_df["date"].unique())
+        bucket_items = [
+            {
+                "bucketId": str(row["bucket"]),
+                "date": str(row["date"]),
+                "availableLbs": float(row["available_lbs"]),
+                "utilizedLbs": float(row["used_lbs"]),
+            }
+            for _, row in bucket_df.iterrows()
+        ]
+        bucket_result = client.bulk_create_bucket_usage({
+            "clearDates": bucket_dates,
+            "items": bucket_items,
+        })
+        summary["bucketUsage"] = {
+            "total": bucket_result.get("total", 0),
+            "successful": bucket_result.get("successful", 0),
+            "failed": bucket_result.get("failed", 0),
+        }
+
+    return summary
+
+
 def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> None:
     global _active_job_id
     repo = JobRepository(db)
@@ -186,6 +354,8 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
     try:
         repo.mark_running(job_id)
         _ensure_scheduling_path()
+        progress_callback("short_term_demand", "Saving short-term demand file rows, if provided.")
+        _save_short_term_demands(request)
         from run_model import run_for_job  # type: ignore
 
         results = run_for_job(
@@ -250,6 +420,13 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         output_payload["inputs"] = inputs_payload  # type: ignore[assignment]
         output_payload["artifacts"] = artifact_payload  # type: ignore[assignment]
         repo.store_results(job_id, request.run_id, output_payload)
+
+        progress_callback("persist_results", "Persisting results to scheduling API.")
+        try:
+            persist_summary = _persist_results_to_scheduling_api(results, request)
+            logger.info("Persisted scheduling results for job %s: %s", job_id, persist_summary)
+        except Exception as persist_exc:
+            logger.warning("Failed to persist results to scheduling API for job %s: %s", job_id, persist_exc)
 
         doc = repo.get_by_id(job_id)
         if doc and doc.get("status") not in ("cancelled", "failed"):

@@ -1,6 +1,7 @@
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from pymongo.database import Database
 
 from database import get_database
@@ -9,6 +10,11 @@ from scheduling_shared.models.bucket_usage import BucketUsage, BucketUsageCreate
 from services.bucket_usage_service import BucketUsageService
 
 router = APIRouter()
+
+
+class BulkCreateBucketUsageRequest(BaseModel):
+    items: List[BucketUsageCreate]
+    clearDates: Optional[List[str]] = None
 
 
 def get_service(db: Database = Depends(get_database)) -> BucketUsageService:
@@ -57,6 +63,14 @@ async def update(document_id: str, payload: BucketUsageUpdate, service: BucketUs
     if document is None:
         raise HTTPException(status_code=404, detail=f"Bucket usage with id {document_id} not found")
     return document
+
+
+@router.post("/bulk", status_code=status.HTTP_200_OK)
+async def bulk_create(payload: BulkCreateBucketUsageRequest, service: BucketUsageService = Depends(get_service)) -> Dict[str, Any]:
+    try:
+        return service.bulk_create(payload.items, payload.clearDates or [])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error bulk creating bucket usage: {exc}")
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_200_OK)

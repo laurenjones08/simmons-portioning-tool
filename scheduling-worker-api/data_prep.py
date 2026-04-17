@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import random
@@ -107,6 +108,15 @@ class SchedulingApiClient(BaseApiClient):
 
     def list_scheduling_outputs(self) -> List[dict]:
         return self._request_json("/scheduling-outputs/search", method="POST", payload={}) or []
+
+    def bulk_create_decisions(self, payload: dict) -> dict:
+        return self._request_json("/scheduling-decisions/bulk", method="POST", payload=payload) or {}
+
+    def bulk_create_outputs(self, payload: dict) -> dict:
+        return self._request_json("/scheduling-outputs/bulk", method="POST", payload=payload) or {}
+
+    def bulk_create_bucket_usage(self, payload: dict) -> dict:
+        return self._request_json("/bucket-usage/bulk", method="POST", payload=payload) or {}
 
 
 class GlobalConfigApiClient(BaseApiClient):
@@ -585,7 +595,14 @@ def _find_column(df: pd.DataFrame, *candidates: str) -> Optional[str]:
 def _load_short_term_demand_frame(short_term_file: Path) -> pd.DataFrame:
     suffix = short_term_file.suffix.lower()
     if suffix in {".csv", ".tsv", ".txt"}:
-        separator = "\t" if suffix == ".tsv" else ","
+        if suffix == ".tsv":
+            return pd.read_csv(short_term_file, sep="\t")
+        raw = short_term_file.read_bytes()[:4096].decode("utf-8", errors="replace")
+        try:
+            dialect = csv.Sniffer().sniff(raw, delimiters=",\t|;")
+            separator = dialect.delimiter
+        except csv.Error:
+            separator = ","
         return pd.read_csv(short_term_file, sep=separator)
     return pd.read_excel(short_term_file, sheet_name=0)
 
@@ -602,16 +619,14 @@ def extract_short_term_demand_records(
         return []
 
     sku_col = _find_column(df, "sku", "skuId", "sku_id")
-    demand_col = _find_column(df, "demand", "demandValue", "demand_value", "amount")
-    type_col = _find_column(df, "type", "demandType", "demand_type")
-    due_date_col = _find_column(df, "dueDate", "due_date", "due")
+    demand_col = _find_column(df, "demand", "demandValue", "demand_value", "amount", "qty", "quantity")
+    due_date_col = _find_column(df, "dueDate", "due_date", "due", "date")
 
     missing_columns = [
         label
         for label, column in [
             ("sku", sku_col),
             ("demand", demand_col),
-            ("type", type_col),
             ("dueDate", due_date_col),
         ]
         if column is None
@@ -629,15 +644,12 @@ def extract_short_term_demand_records(
 
     for _, row in df.iterrows():
         sku = _clean_str(row.get(sku_col))
-        demand_type = _clean_str(row.get(type_col))
         due_date = _as_date(row.get(due_date_col))
         amount = _safe_float(row.get(demand_col))
 
         if not sku or sku not in sku_set or due_date is None or amount is None:
             continue
         if allowed_due_date_set and due_date not in allowed_due_date_set:
-            continue
-        if demand_type and demand_type.lower() != "short":
             continue
 
         records.append(

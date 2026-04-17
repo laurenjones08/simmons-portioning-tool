@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
-from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
 
-from api_client import APIError, cancel_scheduling_job, get_all_configs, list_scheduling_jobs, search_skus, submit_scheduling_job
+from api_client import APIError, cancel_scheduling_job, get_all_configs, list_scheduling_jobs, search_skus, submit_scheduling_job, upload_scheduling_short_term_file
 from views.scheduling_shared import format_timestamp, job_label, sort_records_by_date, status_badge
 
 _MAX_ERROR_PREVIEW_CHARS = 2000
@@ -132,23 +130,13 @@ def _default_run_id() -> str:
     return f"schedule-{date.today().isoformat()}"
 
 
-def _shared_upload_dir() -> Path:
-    return Path("/shared-uploads")
-
-
-def _save_uploaded_short_term_file(uploaded_file, run_id: str) -> str | None:
+def _upload_short_term_file_to_minio(uploaded_file) -> str | None:
     if uploaded_file is None:
         return None
-
-    upload_dir = _shared_upload_dir()
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    suffix = Path(uploaded_file.name).suffix or ".csv"
-    safe_run_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in run_id.strip()) or "schedule"
-    target_name = f"{safe_run_id}-{uuid4().hex[:8]}{suffix}"
-    target_path = upload_dir / target_name
-    target_path.write_bytes(uploaded_file.getbuffer())
-    return str(target_path)
+    return upload_scheduling_short_term_file(
+        uploaded_file.getbuffer().tobytes(),
+        uploaded_file.name,
+    )
 
 
 def _init_state() -> None:
@@ -431,7 +419,7 @@ def render():
         elif not selected_sku_ids:
             st.warning("Select at least one SKU for the scheduling job.")
         else:
-            short_term_file_path = _save_uploaded_short_term_file(uploaded_short_term_file, run_id.strip())
+            short_term_file_path = _upload_short_term_file_to_minio(uploaded_short_term_file)
             payload = {
                 "runId": run_id.strip(),
                 "plantId": str(selected_plant).strip(),

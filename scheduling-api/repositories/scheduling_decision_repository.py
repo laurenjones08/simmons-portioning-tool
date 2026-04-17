@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 
+from bson import ObjectId
 from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError, PyMongoError
@@ -53,4 +54,23 @@ class SchedulingDecisionRepository:
             return result.deleted_count > 0
         except PyMongoError as exc:
             raise Exception(f"Database error deleting scheduling decision: {exc}")
+
+    def delete_by_dates(self, dates: List[str]) -> int:
+        try:
+            result = self.collection.delete_many({"date": {"$in": dates}})
+            return result.deleted_count
+        except PyMongoError as exc:
+            raise Exception(f"Database error deleting scheduling decisions by date: {exc}")
+
+    def bulk_create(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not documents:
+            return []
+        for doc in documents:
+            if "_id" not in doc:
+                doc["_id"] = str(ObjectId())
+        try:
+            self.collection.insert_many(documents, ordered=False)
+        except Exception:
+            pass
+        return documents
 
