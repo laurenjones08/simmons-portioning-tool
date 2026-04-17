@@ -6,15 +6,12 @@ import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit, urlunsplit
 
-from pathlib import Path
-
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from config import get_settings
 from database import close_mongo_connection
 from routers import job_router
-from storage import upload_short_term_demand_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -99,14 +96,6 @@ async def root():
 
 
 app.include_router(job_router.router, prefix="/jobs", tags=["Jobs"])
-
-
-@app.post("/uploads/short-term-file", tags=["Uploads"], summary="Upload a short-term demand file to object store")
-async def upload_short_term_file_endpoint(file: UploadFile = File(...)):
-    file_bytes = await file.read()
-    suffix = Path(file.filename).suffix or ".csv"
-    key = upload_short_term_demand_file(file_bytes, suffix)
-    return {"objectKey": key}
 
 
 if __name__ == "__main__":
