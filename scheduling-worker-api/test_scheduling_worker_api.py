@@ -25,9 +25,9 @@ for module_name in [
     "run_model",
 ]:
     sys.modules.pop(module_name, None)
-sys.path.insert(0, str(ROOT / "scheduling-worker-api"))
-sys.path.insert(0, str(ROOT / "scheduling"))
 sys.path.insert(0, str(ROOT / "scheduling-shared"))
+sys.path.insert(0, str(ROOT / "scheduling"))
+sys.path.insert(0, str(ROOT / "scheduling-worker-api"))
 
 from main import app  # noqa: E402
 import job_service as job_service_module  # noqa: E402

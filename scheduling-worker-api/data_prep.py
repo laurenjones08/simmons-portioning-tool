@@ -493,6 +493,8 @@ def _mix_bird_size(mix: Dict[str, Any]) -> str:
 
 
 def _normalize_line_type(value: Any) -> str:
+    if value is None:
+        return ""
     return " ".join(_clean_str(value).upper().split())
 
 

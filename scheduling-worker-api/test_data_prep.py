@@ -48,11 +48,17 @@ class StubPrep(SchedulingWorkerDataPrep):
                 return [{"key": "scheduling.gamma_value", "value": 0.25}]
 
         class FakeEnumerationApi:
+            def list_skus(self):
+                return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
             def list_mixes(self):
                 return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
 
             def list_buckets(self):
                 return [{"name": "bucket-1"}]
+
+            def list_cut_strategies(self):
+                return []
 
             def list_mix_metrics(self, sku_trade_numbers=None):
                 return [
@@ -161,11 +167,17 @@ def test_prepare_assigns_line_by_mix_mfg_type(monkeypatch):
                     return [{"key": "scheduling.gamma_value", "value": 0.25}]
 
             class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
                 def list_mixes(self):
                     return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
 
                 def list_buckets(self):
                     return [{"name": "bucket-1"}]
+
+                def list_cut_strategies(self):
+                    return []
 
                 def list_mix_metrics(self, sku_trade_numbers=None):
                     return [
@@ -246,6 +258,9 @@ def test_prepare_uses_cut_strategy_line_type_when_mix_mfg_type_is_generic_dsi(mo
                     return [{"key": "scheduling.gamma_value", "value": 0.25}]
 
             class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
                 def list_mixes(self):
                     return [
                         {
@@ -466,6 +481,9 @@ def test_prepare_combines_bird_requirements_across_mixes():
                     return [{"key": "scheduling.gamma_value", "value": 0.25}]
 
             class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "ALL"}]
+
                 def list_mixes(self):
                     return [
                         {"_id": "mix-sb", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0},
@@ -474,6 +492,9 @@ def test_prepare_combines_bird_requirements_across_mixes():
 
                 def list_buckets(self):
                     return [{"name": "bucket-1"}]
+
+                def list_cut_strategies(self):
+                    return []
 
                 def list_mix_metrics(self, sku_trade_numbers=None):
                     return [
@@ -619,6 +640,7 @@ def test_prepare_filters_out_metrics_with_missing_mix_documents():
                         {
                             "lineId": "VBS-DSI888",
                             "friendlyName": "Van Buren DSI888",
+                            "lineType": "DSI888",
                             "plant": "VBS",
                             "hoursOfLaborAvailablePerShift": 8.0,
                             "lineThroughput": 8500.0,
