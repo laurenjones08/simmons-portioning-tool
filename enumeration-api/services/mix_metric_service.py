@@ -1,11 +1,18 @@
 """Business logic layer for MixMetric operations."""
 
 from typing import List, Optional, Dict, Any
+import logging
+
+from bson import ObjectId
+from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
 from models.mix_metric import MixMetric, MixMetricSearchCriteria
 from repositories.mix_metric_repository import MixMetricRepository
 from repositories.mix_repository import MixRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class MixMetricService:
@@ -33,7 +40,28 @@ class MixMetricService:
 
     def get_metric_by_id(self, metric_id: str) -> Optional[MixMetric]:
         doc = self.repository.get_by_id(metric_id)
-        return MixMetric(**doc) if doc else None
+        return self._safe_parse_metric(doc, f"get_by_id({metric_id})")
+
+    @staticmethod
+    def _normalize_metric_doc(doc: dict) -> dict:
+        """Normalize legacy Mongo types to the string fields expected by MixMetric."""
+        normalized = dict(doc)
+        for key in ("_id", "mixId", "bucketId"):
+            value = normalized.get(key)
+            if isinstance(value, ObjectId):
+                normalized[key] = str(value)
+        return normalized
+
+    @classmethod
+    def _safe_parse_metric(cls, doc: Optional[dict], context: str) -> Optional[MixMetric]:
+        """Parse a raw mix metric document, skipping invalid legacy records."""
+        if doc is None:
+            return None
+        try:
+            return MixMetric(**cls._normalize_metric_doc(doc))
+        except ValidationError as exc:
+            logger.warning("Skipping invalid mix metric document during %s: %s", context, exc)
+            return None
 
     def search_metrics(self, criteria: MixMetricSearchCriteria) -> List[MixMetric]:
         raw = criteria.model_dump(by_alias=True, exclude_none=True)
@@ -47,7 +75,12 @@ class MixMetricService:
             mongo_criteria["skuKeys"] = raw["skuTradeNumber"]
 
         docs = self.repository.search(mongo_criteria)
-        return [MixMetric(**d) for d in docs]
+        parsed: List[MixMetric] = []
+        for doc in docs:
+            metric = self._safe_parse_metric(doc, "search")
+            if metric is not None:
+                parsed.append(metric)
+        return parsed
 
     def update_metric(self, metric_id: str, payload: MixMetric) -> Optional[MixMetric]:
         metric = MixMetric(_id=metric_id, **payload.model_dump(by_alias=True))

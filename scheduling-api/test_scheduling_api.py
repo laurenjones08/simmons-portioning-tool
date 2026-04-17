@@ -292,6 +292,41 @@ def test_sku_demand_search_route_uses_service():
         app.dependency_overrides.pop(sku_demand_router.get_service, None)
 
 
+def test_sku_demand_service_serializes_search_dates():
+    from services.sku_demand_service import SKUDemandService
+
+    captured = {}
+
+    class FakeRepository:
+        def search(self, criteria):
+            captured["criteria"] = criteria
+            return [
+                {
+                    "_id": "sd-1",
+                    "skuId": "50624",
+                    "demandValue": 1500.0,
+                    "demandType": "Short",
+                    "dueDate": "2026-04-15",
+                }
+            ]
+
+    service = SKUDemandService(FakeRepository())
+    result = service.search(
+        SKUDemandSearchCriteria(
+            skuIds=["50624", "50625"],
+            demandType="Short",
+            dueDates=["2026-04-15", "2026-04-16"],
+        )
+    )
+
+    assert captured["criteria"] == {
+        "skuIds": ["50624", "50625"],
+        "demandType": "Short",
+        "dueDates": ["2026-04-15", "2026-04-16"],
+    }
+    assert result[0].sku_id == "50624"
+
+
 def test_job_artifact_proxy_rewrites_download_urls(monkeypatch):
     async def fake_fetch_worker_artifacts(job_id: str):
         return [

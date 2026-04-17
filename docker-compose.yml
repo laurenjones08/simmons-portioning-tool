@@ -167,7 +167,10 @@ services:
       MONGODB_DATABASE: scheduling_db
       SERVICE_NAME: scheduling-worker-api
       ROOT_PATH: /api/scheduling-worker
+      GLOBAL_CONFIG_API_URL: http://api-gateway:80/api/config
       ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
+      SCHEDULING_API_URL: http://api-gateway:80/api/scheduling
+      DATA_PREP_TIMEOUT_SECONDS: "120"
       OBJECT_STORE_ENDPOINT_URL: http://minio:9000
       OBJECT_STORE_ACCESS_KEY_ID: minioadmin
       OBJECT_STORE_SECRET_ACCESS_KEY: minioadmin
@@ -183,6 +186,7 @@ services:
       - ./scheduling-worker-api:/app
       - ./scheduling:/app/scheduling
       - ./scheduling-shared:/shared
+      - scheduling_uploads:/shared-uploads
 
     networks:
       - mongo_net
@@ -333,6 +337,7 @@ services:
 
     volumes:
       - ./streamlit-app:/app
+      - scheduling_uploads:/shared-uploads
 
     environment:
       ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
@@ -387,6 +392,8 @@ volumes:
   mongo_data:
     driver: local
   minio_data:
+    driver: local
+  scheduling_uploads:
     driver: local
 
 # Custom network for service communication

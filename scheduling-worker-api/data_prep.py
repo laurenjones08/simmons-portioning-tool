@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import socket
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from urllib import error, request
 
 import pandas as pd
@@ -23,12 +26,30 @@ def _env_url(*names: str, default: str) -> str:
     return default.rstrip("/")
 
 
+def _env_float(*names: str, default: float) -> float:
+    for name in names:
+        value = os.getenv(name)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except ValueError:
+            continue
+    return default
+
+
 @dataclass(frozen=True)
 class ApiEndpoints:
-    scheduling_api_url: str = field(default_factory=lambda: _env_url("SCHEDULING_API_URL", default="http://localhost:8003"))
-    global_config_api_url: str = field(default_factory=lambda: _env_url("GLOBAL_CONFIG_API_URL", default="http://localhost:8002"))
-    enumeration_api_url: str = field(default_factory=lambda: _env_url("ENUMERATION_API_URL", default="http://localhost:8001"))
-    timeout_seconds: float = 10.0
+    scheduling_api_url: str = field(default_factory=lambda: _env_url("SCHEDULING_API_URL", default="http://api-gateway:80/api/scheduling"))
+    global_config_api_url: str = field(default_factory=lambda: _env_url("GLOBAL_CONFIG_API_URL", default="http://api-gateway:80/api/config"))
+    enumeration_api_url: str = field(default_factory=lambda: _env_url("ENUMERATION_API_URL", default="http://api-gateway:80/api/enumeration"))
+    timeout_seconds: float = field(
+        default_factory=lambda: _env_float(
+            "DATA_PREP_TIMEOUT_SECONDS",
+            "SCHEDULING_WORKER_API_TIMEOUT_SECONDS",
+            default=120.0,
+        )
+    )
 
 
 class ApiClientError(RuntimeError):
@@ -36,7 +57,7 @@ class ApiClientError(RuntimeError):
 
 
 class BaseApiClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 10.0):
+    def __init__(self, base_url: str, timeout_seconds: float = 120.0):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
@@ -59,6 +80,8 @@ class BaseApiClient:
             raise ApiClientError(f"HTTP {exc.code} while calling {url}: {detail}") from exc
         except error.URLError as exc:
             raise ApiClientError(f"Could not reach {url}: {exc.reason}") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ApiClientError(f"Timed out after {self.timeout_seconds:.0f}s while calling {url}") from exc
         except json.JSONDecodeError as exc:
             raise ApiClientError(f"Invalid JSON returned from {url}") from exc
 
@@ -66,6 +89,11 @@ class BaseApiClient:
 class SchedulingApiClient(BaseApiClient):
     def search_sku_demands(self, criteria: Optional[dict] = None) -> List[dict]:
         return self._request_json("/sku-demands/search", method="POST", payload=criteria or {}) or []
+
+    def bulk_create_sku_demands(self, demands: Sequence[dict]) -> Dict[str, Any]:
+        payload = {"demands": list(demands)}
+        response = self._request_json("/sku-demands/bulk", method="POST", payload=payload)
+        return response or {"total": 0, "successful": 0, "failed": 0, "errors": []}
 
     def search_available_wip(self, criteria: Optional[dict] = None) -> List[dict]:
         return self._request_json("/available-wip/search", method="POST", payload=criteria or {}) or []
@@ -105,8 +133,20 @@ class EnumerationApiClient(BaseApiClient):
     def list_cut_strategies(self) -> List[dict]:
         return self._request_json("/cut-strategies/search", method="POST", payload={}) or []
 
-    def list_mix_metrics(self) -> List[dict]:
-        return self._request_json("/mix-metrics/search", method="POST", payload={}) or []
+    def list_mix_metrics(self, sku_trade_numbers: Optional[Sequence[str]] = None) -> List[dict]:
+        if not sku_trade_numbers:
+            return self._request_json("/metrics/search", method="POST", payload={}) or []
+
+        metrics_by_id: Dict[str, dict] = {}
+        for sku_trade_number in _normalize_ids(sku_trade_numbers):
+            if not sku_trade_number:
+                continue
+            payload = {"skuTradeNumber": sku_trade_number}
+            for metric in self._request_json("/metrics/search", method="POST", payload=payload) or []:
+                metric_id = str(metric.get("_id") or metric.get("metricId") or "").strip()
+                if metric_id:
+                    metrics_by_id[metric_id] = metric
+        return list(metrics_by_id.values())
 
 
 @dataclass
@@ -123,6 +163,7 @@ class DataPrepSources:
     bucket_usage: List[dict] = field(default_factory=list)
     scheduling_decisions: List[dict] = field(default_factory=list)
     scheduling_outputs: List[dict] = field(default_factory=list)
+    api_timings: Dict[str, float] = field(default_factory=dict)
 
 
 # -----------------------------------------------------------------------------
@@ -132,6 +173,16 @@ class DataPrepSources:
 
 def _demo_parts() -> List[str]:
     return ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+
+def _emit_progress(
+    progress_callback: Optional[Callable[[str, Optional[str], Optional[Dict[str, Any]]], None]],
+    stage: str,
+    message: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(stage, message, details or {})
 
 
 def _demo_decisions() -> List[str]:
@@ -287,6 +338,41 @@ def _demo_line_throughput() -> Dict[str, float]:
     return {"DSI 888": 9000, "DSI 884": 3000, "DB20": 67000}
 
 
+def _demo_bird_eligibility(parts: Sequence[str]) -> tuple[Dict[str, int], Dict[str, int], Dict[str, str]]:
+    big_allowed = {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 0,
+        "F": 1,
+        "G": 1,
+        "H": 0,
+    }
+    small_allowed = {
+        "A": 0,
+        "B": 1,
+        "C": 1,
+        "D": 0,
+        "E": 1,
+        "F": 1,
+        "G": 0,
+        "H": 1,
+    }
+    normalized_parts = [str(part).strip() for part in parts if str(part).strip()]
+    bird_type: Dict[str, str] = {}
+    for part in normalized_parts:
+        if big_allowed.get(part, 0) and small_allowed.get(part, 0):
+            bird_type[part] = "all"
+        elif big_allowed.get(part, 0):
+            bird_type[part] = "big"
+        elif small_allowed.get(part, 0):
+            bird_type[part] = "small"
+        else:
+            bird_type[part] = "none"
+    return big_allowed, small_allowed, bird_type
+
+
 # -----------------------------------------------------------------------------
 # Generic helpers
 # -----------------------------------------------------------------------------
@@ -402,6 +488,138 @@ def _metric_unit_plan(metric: Dict[str, Any]) -> List[Dict[str, Any]]:
     return list(metric.get("unitPlan") or metric.get("unit_plan") or [])
 
 
+def _mix_bird_size(mix: Dict[str, Any]) -> str:
+    return _clean_str(mix.get("reqBirdSize") or mix.get("birdSize") or mix.get("req_bird_size")).upper()
+
+
+def _normalize_line_type(value: Any) -> str:
+    return " ".join(_clean_str(value).upper().split())
+
+
+def _line_id(line: Dict[str, Any]) -> str:
+    return _clean_str(line.get("lineId") or line.get("_id") or line.get("friendlyName"))
+
+
+def _line_type(line: Dict[str, Any]) -> str:
+    return _normalize_line_type(
+        line.get("lineType")
+        or line.get("mfgType")
+        or line.get("lineId")
+        or line.get("friendlyName")
+        or line.get("line_id")
+    )
+
+
+def _cut_strategy_id(mix: Dict[str, Any]) -> str:
+    return _clean_str(mix.get("cutStrategyID") or mix.get("cutStrategyId") or mix.get("cut_strategy_id"))
+
+
+def _cut_strategy_line_type(cut_strategy: Dict[str, Any]) -> str:
+    return _normalize_line_type(cut_strategy.get("lineType") or cut_strategy.get("mfgType"))
+
+
+def _line_permitted_cut_strategy_ids(line: Dict[str, Any]) -> List[str]:
+    values = line.get("permittedCutStrategyIds") or line.get("permitted_cut_strategy_ids") or []
+    if isinstance(values, str):
+        values = [values]
+    return _normalize_ids(values)
+
+
+def _line_type_matches(line_type: Any, mfg_type: Any) -> bool:
+    normalized_line = _normalize_line_type(line_type)
+    normalized_mfg = _normalize_line_type(mfg_type)
+    if not normalized_line or not normalized_mfg:
+        return False
+    return normalized_line == normalized_mfg
+
+
+def _sku_bird_size(sku: Dict[str, Any]) -> str:
+    return _clean_str(sku.get("birdSize") or sku.get("bird_size")).upper()
+
+
+def _normalize_column_name(name: Any) -> str:
+    return "".join(ch.lower() for ch in str(name) if ch.isalnum())
+
+
+def _find_column(df: pd.DataFrame, *candidates: str) -> Optional[str]:
+    lookup = {_normalize_column_name(column): column for column in df.columns}
+    for candidate in candidates:
+        column = lookup.get(_normalize_column_name(candidate))
+        if column is not None:
+            return column
+    return None
+
+
+def _load_short_term_demand_frame(short_term_file: Path) -> pd.DataFrame:
+    suffix = short_term_file.suffix.lower()
+    if suffix in {".csv", ".tsv", ".txt"}:
+        separator = "\t" if suffix == ".tsv" else ","
+        return pd.read_csv(short_term_file, sep=separator)
+    return pd.read_excel(short_term_file, sheet_name=0)
+
+
+def extract_short_term_demand_records(
+    short_term_file: Path,
+    P: Sequence[str],
+    allowed_due_dates: Optional[Sequence[pd.Timestamp]] = None,
+) -> List[Dict[str, Any]]:
+    """Return normalized short-term demand rows from a flat demand file."""
+
+    df = _load_short_term_demand_frame(short_term_file)
+    if df.empty:
+        return []
+
+    sku_col = _find_column(df, "sku", "skuId", "sku_id")
+    demand_col = _find_column(df, "demand", "demandValue", "demand_value", "amount")
+    type_col = _find_column(df, "type", "demandType", "demand_type")
+    due_date_col = _find_column(df, "dueDate", "due_date", "due")
+
+    missing_columns = [
+        label
+        for label, column in [
+            ("sku", sku_col),
+            ("demand", demand_col),
+            ("type", type_col),
+            ("dueDate", due_date_col),
+        ]
+        if column is None
+    ]
+    if missing_columns:
+        raise ValueError(
+            "Short-term demand file must contain columns for "
+            + ", ".join(missing_columns)
+            + ". Expected a flat file with one demand record per row."
+        )
+
+    sku_set = set(P)
+    allowed_due_date_set = set(allowed_due_dates or [])
+    records: List[Dict[str, Any]] = []
+
+    for _, row in df.iterrows():
+        sku = _clean_str(row.get(sku_col))
+        demand_type = _clean_str(row.get(type_col))
+        due_date = _as_date(row.get(due_date_col))
+        amount = _safe_float(row.get(demand_col))
+
+        if not sku or sku not in sku_set or due_date is None or amount is None:
+            continue
+        if allowed_due_date_set and due_date not in allowed_due_date_set:
+            continue
+        if demand_type and demand_type.lower() != "short":
+            continue
+
+        records.append(
+            {
+                "skuId": sku,
+                "demandValue": amount,
+                "demandType": "Short",
+                "dueDate": due_date.strftime("%Y-%m-%d"),
+            }
+        )
+
+    return records
+
+
 # -----------------------------------------------------------------------------
 # API-backed data prep
 # -----------------------------------------------------------------------------
@@ -424,20 +642,38 @@ class SchedulingWorkerDataPrep:
         self,
         sku_ids: Sequence[str] | None = None,
         due_dates: Sequence[pd.Timestamp] | None = None,
+        progress_callback: Optional[Callable[[str, Optional[str], Optional[Dict[str, Any]]], None]] = None,
     ) -> DataPrepSources:
         sku_demand_criteria: Dict[str, Any] = {"demandType": "Short"}
         if sku_ids:
             sku_demand_criteria["skuIds"] = list(sku_ids)
         if due_dates:
             sku_demand_criteria["dueDates"] = _date_strings(due_dates)
+        api_timings: Dict[str, float] = {}
+
+        def timed_fetch(name: str, loader: Callable[[], List[dict]]) -> List[dict]:
+            _emit_progress(progress_callback, "data_prep_api_call", f"Loading {name} from upstream API.", {"resource": name})
+            started = time.perf_counter()
+            rows = loader()
+            api_timings[name] = round(time.perf_counter() - started, 3)
+            _emit_progress(
+                progress_callback,
+                "data_prep_api_call_complete",
+                f"Loaded {name}.",
+                {"resource": name, "count": len(rows), "seconds": api_timings[name]},
+            )
+            return rows
 
         return DataPrepSources(
-            mixes=self.enumeration_api.list_mixes(),
-            buckets=self.enumeration_api.list_buckets(),
-            mix_metrics=self.enumeration_api.list_mix_metrics(),
-            lines=self.config_api.list_lines(),
-            configs=self.config_api.list_configs(),
-            sku_demands=self.scheduling_api.search_sku_demands(sku_demand_criteria),
+            skus=timed_fetch("skus", self.enumeration_api.list_skus),
+            mixes=timed_fetch("mixes", self.enumeration_api.list_mixes),
+            buckets=timed_fetch("buckets", self.enumeration_api.list_buckets),
+            cut_strategies=timed_fetch("cut_strategies", self.enumeration_api.list_cut_strategies),
+            mix_metrics=timed_fetch("mix_metrics", lambda: self.enumeration_api.list_mix_metrics(sku_ids)),
+            lines=timed_fetch("lines", self.config_api.list_lines),
+            configs=timed_fetch("configs", self.config_api.list_configs),
+            sku_demands=timed_fetch("sku_demands", lambda: self.scheduling_api.search_sku_demands(sku_demand_criteria)),
+            api_timings=api_timings,
         )
 
     def _prepare_demo_inputs(self, P: Sequence[str], T: Sequence[pd.Timestamp], week1_dates: Sequence[pd.Timestamp], M: Sequence[pd.Period]) -> Dict[str, Any]:
@@ -462,6 +698,7 @@ class SchedulingWorkerDataPrep:
         WIP = {(bucket, day): demo_wip.get(bucket, 0.0) for bucket in B for day in T}
         demo_y = _demo_yield_map()
         Y = {(sku, decision): demo_y.get((sku, decision), 0.0) for sku in P for decision in K}
+        big_allowed, small_allowed, bird_type = _demo_bird_eligibility(P)
         return {
             "P": list(P),
             "T": list(T),
@@ -485,6 +722,9 @@ class SchedulingWorkerDataPrep:
             "R": _demo_rate_map(),
             "H": {(line, day): _demo_hours_map().get(line, 0.0) for line in L for day in T},
             "line_throughput": _demo_line_throughput(),
+            "big_allowed": big_allowed,
+            "small_allowed": small_allowed,
+            "bird_type": bird_type,
             "gamma": 0.1,
         }
 
@@ -493,7 +733,9 @@ class SchedulingWorkerDataPrep:
         metrics: List[dict] = []
         for metric in sources.mix_metrics:
             sku_keys = set(_metric_sku_keys(metric))
-            if selected and sku_keys.isdisjoint(selected):
+            if selected and not sku_keys:
+                continue
+            if selected and not sku_keys.issubset(selected):
                 continue
             if not sku_keys and not selected:
                 continue
@@ -518,7 +760,7 @@ class SchedulingWorkerDataPrep:
             if plant_id and line_plant != plant_id:
                 continue
             lines.append(line)
-        lines.sort(key=lambda line: _clean_str(line.get("lineId") or line.get("friendlyName")))
+        lines.sort(key=lambda line: _line_id(line))
         return lines
 
     def _select_buckets(self, sources: DataPrepSources, metrics: Sequence[dict], wip_rows: Sequence[dict]) -> List[str]:
@@ -547,7 +789,7 @@ class SchedulingWorkerDataPrep:
         base_hours_by_line: Dict[str, float] = {}
         line_throughput: Dict[str, float] = {}
         for line in lines:
-            line_id = _clean_str(line.get("lineId") or line.get("friendlyName") or line.get("lineType"))
+            line_id = _line_id(line)
             if not line_id:
                 continue
             hours = _safe_float(line.get("hoursOfLaborAvailablePerShift") or line.get("hours_of_labor_available_per_shift"))
@@ -561,7 +803,7 @@ class SchedulingWorkerDataPrep:
         if not base_hours_by_line and self.use_demo_fallbacks:
             base_hours_by_line = _demo_hours_map()
         for line in lines:
-            line_id = _clean_str(line.get("lineId") or line.get("friendlyName") or line.get("lineType"))
+            line_id = _line_id(line)
             if not line_id:
                 continue
             base_hours_by_line.setdefault(line_id, 8.0)
@@ -603,7 +845,7 @@ class SchedulingWorkerDataPrep:
         if short_term_file:
             path = Path(short_term_file)
             if path.exists():
-                return load_short_term_demand_from_excel(path, parts, week1_dates)
+                return load_short_term_demand_from_table(path, parts, week1_dates)
 
         return demand
 
@@ -699,29 +941,59 @@ class SchedulingWorkerDataPrep:
             return mapping
         return _demo_bucket_of_k() if self.use_demo_fallbacks else {}
 
-    def _build_line_of_k(self, metrics: Sequence[dict], mixes: Sequence[dict], lines: Sequence[dict]) -> Dict[str, str]:
-        mix_lookup = {_clean_str(mix.get("_id") or mix.get("mixId")): mix for mix in mixes}
-        line_lookup: Dict[str, List[str]] = {}
+    def _build_line_of_k(
+            self,
+            mixes: Sequence[dict],
+            lines: Sequence[dict],
+            cut_strategies: Sequence[dict],
+    ) -> Dict[str, str]:
+        cut_strategy_lookup = {
+            _clean_str(strategy.get("_id") or strategy.get("cutStrategyId")): strategy
+            for strategy in cut_strategies
+            if _clean_str(strategy.get("_id") or strategy.get("cutStrategyId"))
+        }
+        line_candidates: List[tuple[str, str, List[str]]] = []
         for line in lines:
-            line_type = _clean_str(line.get("lineType") or line.get("mfgType"))
-            line_id = _clean_str(line.get("lineId") or line.get("friendlyName") or line_type)
+            line_type = _line_type(line)
+            line_id = _line_id(line)
             if not line_type or not line_id:
                 continue
-            line_lookup.setdefault(line_type, []).append(line_id)
+            line_candidates.append((line_type, line_id, _line_permitted_cut_strategy_ids(line)))
 
         mapping: Dict[str, str] = {}
-        for metric in metrics:
-            metric_id = _metric_id(metric)
-            mix_id = _metric_mix_id(metric)
-            mix_doc = mix_lookup.get(mix_id, {})
-            mfg_type = _clean_str(mix_doc.get("mfgType") or mix_doc.get("lineType"))
-            candidates = line_lookup.get(mfg_type, [])
+        for mix in mixes:
+            mix_id = _clean_str(mix.get("_id") or mix.get("mixId"))
+            if not mix_id:
+                continue
+            mfg_type = _normalize_line_type(mix.get("mfgType") or mix.get("mfg_type"))
+            mix_cut_strategy_id = _cut_strategy_id(mix)
+            cut_strategy = cut_strategy_lookup.get(mix_cut_strategy_id, {})
+            effective_line_type = _cut_strategy_line_type(cut_strategy) or mfg_type
+
+            strategy_candidates = [
+                line_id
+                for line_type, line_id, permitted_cut_strategy_ids in line_candidates
+                if mix_cut_strategy_id and mix_cut_strategy_id in permitted_cut_strategy_ids
+            ]
+            candidates = strategy_candidates or [
+                line_id
+                for line_type, line_id, _permitted in line_candidates
+                if _line_type_matches(line_type, effective_line_type)
+            ]
             if candidates:
-                mapping[metric_id] = candidates[0]
+                mapping[mix_id] = random.choice(candidates)
 
         if mapping:
             return mapping
         return _demo_line_of_k() if self.use_demo_fallbacks else {}
+
+    def _filter_runnable_metrics(
+        self,
+        metrics: Sequence[dict],
+        line_of_k: Dict[str, str],
+    ) -> List[dict]:
+        runnable_mix_ids = set(line_of_k)
+        return [metric for metric in metrics if _metric_mix_id(metric) in runnable_mix_ids]
 
     def _build_yield_map(self, metrics: Sequence[dict], parts: Sequence[str]) -> Dict[tuple[str, str], float]:
         part_set = set(parts)
@@ -777,6 +1049,69 @@ class SchedulingWorkerDataPrep:
             return rates
         return _demo_rate_map() if self.use_demo_fallbacks else {}
 
+    def _build_bird_eligibility(
+        self,
+        mixes: Sequence[dict],
+        skus: Sequence[dict],
+        metrics: Sequence[dict],
+        parts: Sequence[str],
+    ) -> tuple[Dict[str, int], Dict[str, int], Dict[str, str]]:
+        part_list = [str(part).strip() for part in parts if str(part).strip()]
+        part_set = set(part_list)
+        big_allowed = {part: 0 for part in part_list}
+        small_allowed = {part: 0 for part in part_list}
+
+        mix_lookup = {_clean_str(mix.get("_id") or mix.get("mixId")): mix for mix in mixes}
+        sku_bird_lookup = {
+            _clean_str(sku.get("tradeNumber") or sku.get("trade_number") or sku.get("_id")): _sku_bird_size(sku)
+            for sku in skus
+            if _clean_str(sku.get("tradeNumber") or sku.get("trade_number") or sku.get("_id"))
+        }
+
+        def apply_requirement(sku_id: str, requirement: str) -> None:
+            req = requirement.upper()
+            if req == "ALL":
+                big_allowed[sku_id] = 1
+                small_allowed[sku_id] = 1
+            elif req == "BB":
+                big_allowed[sku_id] = 1
+            elif req == "SB":
+                small_allowed[sku_id] = 1
+
+        for metric in metrics:
+            mix_id = _metric_mix_id(metric)
+            mix_doc = mix_lookup.get(mix_id, {})
+            requirement = _mix_bird_size(mix_doc)
+            if not requirement:
+                continue
+
+            allowed_skus = set(_metric_sku_keys(metric))
+            if not allowed_skus:
+                skus_map = mix_doc.get("skus") or {}
+                if isinstance(skus_map, dict):
+                    allowed_skus = set(_normalize_ids(skus_map.keys()))
+
+            for sku_id in allowed_skus:
+                if sku_id in part_set:
+                    apply_requirement(sku_id, requirement)
+
+        for sku_id, requirement in sku_bird_lookup.items():
+            if sku_id in part_set and not (big_allowed[sku_id] or small_allowed[sku_id]):
+                apply_requirement(sku_id, requirement)
+
+        bird_type: Dict[str, str] = {}
+        for part in part_list:
+            if big_allowed[part] and small_allowed[part]:
+                bird_type[part] = "all"
+            elif big_allowed[part]:
+                bird_type[part] = "big"
+            elif small_allowed[part]:
+                bird_type[part] = "small"
+            else:
+                bird_type[part] = "none"
+
+        return big_allowed, small_allowed, bird_type
+
     def _build_gamma(self, configs: Sequence[dict]) -> float:
         config_values = _config_map(configs)
         value = _safe_float(config_values.get("scheduling.gamma_value"))
@@ -794,7 +1129,10 @@ class SchedulingWorkerDataPrep:
         horizon_days: Optional[int] = None,
         plant_id: Optional[str] = None,
         sku_ids: Optional[Sequence[str]] = None,
+        progress_callback: Optional[Callable[[str, Optional[str], Optional[Dict[str, Any]]], None]] = None,
     ) -> Dict[str, Any]:
+        overall_started = time.perf_counter()
+        prep_timings: Dict[str, float] = {}
         plan_start_date = _job_value(job, "plan_start_date", "planStartDate", default=plan_start_date or "2026-01-05")
         horizon_days = int(_job_value(job, "horizon_days", "horizonDays", default=horizon_days or 12))
         plant_id = _clean_str(_job_value(job, "plant_id", "plantId", default=plant_id))
@@ -813,8 +1151,12 @@ class SchedulingWorkerDataPrep:
         M = sorted({d.to_period("M") for d in T})
         month_of_day = {d: d.to_period("M") for d in T}
 
-        sources = self.load_sources(sku_ids, week1_dates)
+        _emit_progress(progress_callback, "data_prep_loading_sources", "Loading dataprep sources from upstream APIs.")
+        started = time.perf_counter()
+        sources = self.load_sources(sku_ids, week1_dates, progress_callback=progress_callback)
+        prep_timings["load_sources"] = round(time.perf_counter() - started, 3)
         available_wip_rows = self.scheduling_api.search_available_wip({"plantName": plant_id}) if plant_id else self.scheduling_api.search_available_wip()
+        prep_timings["available_wip"] = round(time.perf_counter() - started - prep_timings["load_sources"], 3)
         selected_metrics = self._select_mix_metrics(sources, sku_ids)
         if not selected_metrics:
             if self.use_demo_fallbacks:
@@ -829,12 +1171,50 @@ class SchedulingWorkerDataPrep:
                 return self._prepare_demo_inputs(sku_ids, T, week1_dates, M)
             raise ValueError(f"No active lines found for plantId '{plant_id}'")
 
+        _emit_progress(
+            progress_callback,
+            "data_prep_filtering_metrics",
+            "Filtering mix metrics to plant-runnable decisions.",
+            {
+                "selectedMetricCount": len(selected_metrics),
+                "selectedMixCount": len(selected_mixes),
+                "selectedLineCount": len(selected_lines),
+            },
+        )
+        mix_line_of_k = self._build_line_of_k(selected_mixes, selected_lines, sources.cut_strategies)
+        selected_metrics = self._filter_runnable_metrics(selected_metrics, mix_line_of_k)
+        if not selected_metrics:
+            if self.use_demo_fallbacks:
+                return self._prepare_demo_inputs(sku_ids, T, week1_dates, M)
+            raise ValueError(
+                f"No runnable mix metrics found for skuIds {sku_ids} at plantId '{plant_id}'. "
+                "The selected plant does not have a matching active line for the available mixes."
+            )
+
+        selected_mix_ids = _normalize_ids(_metric_mix_id(metric) for metric in selected_metrics)
+        selected_mixes = self._select_mixes(sources, selected_mix_ids)
+        line_of_k = {
+            _metric_id(metric): mix_line_of_k[_metric_mix_id(metric)]
+            for metric in selected_metrics
+            if _metric_mix_id(metric) in mix_line_of_k
+        }
+        prep_timings["filter_metrics"] = round(time.perf_counter() - overall_started - sum(prep_timings.values()), 3)
+
         selected_buckets = self._select_buckets(sources, selected_metrics, available_wip_rows)
         if not selected_buckets:
             if self.use_demo_fallbacks:
                 return self._prepare_demo_inputs(sku_ids, T, week1_dates, M)
             raise ValueError("No buckets were available for the selected mix metrics")
 
+        _emit_progress(
+            progress_callback,
+            "data_prep_building_inputs",
+            "Building demand, capacity, yield, and contract inputs.",
+            {
+                "runnableMetricCount": len(selected_metrics),
+                "selectedBucketCount": len(selected_buckets),
+            },
+        )
         D_short = self._build_short_term_demand(sources, week1_dates, sku_ids, short_term_file)
         D_week1 = build_week1_demand(sku_ids, week1_dates, D_short)
         base_wip_by_bucket = self._build_base_wip_by_bucket(available_wip_rows, plant_id, selected_buckets)
@@ -853,12 +1233,12 @@ class SchedulingWorkerDataPrep:
         WIP = {(bucket, day): base_wip_by_bucket.get(bucket, 0.0) for bucket in selected_buckets for day in T}
         monthly_contract = self._build_monthly_contract(sku_ids, M)
         bucket_of_k = self._build_bucket_of_k(selected_metrics)
-        line_of_k = self._build_line_of_k(selected_metrics, selected_mixes, selected_lines)
         Y = self._build_yield_map(selected_metrics, sku_ids)
         V = self._build_value_map(selected_metrics)
         R = self._build_rate_map(selected_mixes, selected_metrics)
         base_hours_by_line, H, line_throughput = self._build_hours_and_throughput(selected_lines, T)
         gamma = self._build_gamma(sources.configs)
+        prep_timings["assemble_inputs"] = round(time.perf_counter() - overall_started - sum(prep_timings.values()), 3)
 
         metric_ids = [_metric_id(metric) for metric in selected_metrics]
         missing_buckets = [metric_id for metric_id in metric_ids if metric_id not in bucket_of_k]
@@ -871,6 +1251,30 @@ class SchedulingWorkerDataPrep:
 
         if self.use_demo_fallbacks and not line_throughput:
             line_throughput = _demo_line_throughput()
+
+        big_allowed, small_allowed, bird_type = self._build_bird_eligibility(
+            selected_mixes,
+            sources.skus,
+            selected_metrics,
+            sku_ids,
+        )
+        prep_timings["total_data_prep"] = round(time.perf_counter() - overall_started, 3)
+        _emit_progress(
+            progress_callback,
+            "data_prep_complete",
+            "Finished dataprep.",
+            {
+                "timings": {**sources.api_timings, **prep_timings},
+                "counts": {
+                    "skuCount": len(sku_ids),
+                    "metricCount": len(selected_metrics),
+                    "mixCount": len(selected_mixes),
+                    "lineCount": len(selected_lines),
+                    "bucketCount": len(selected_buckets),
+                    "dayCount": len(T),
+                },
+            },
+        )
 
         return {
             "P": sku_ids,
@@ -896,62 +1300,53 @@ class SchedulingWorkerDataPrep:
             "H": H,
             "L_delay": {},
             "line_throughput": line_throughput,
+            "big_allowed": big_allowed,
+            "small_allowed": small_allowed,
+            "bird_type": bird_type,
             "gamma": gamma,
+            "dataPrepTimings": {**sources.api_timings, **prep_timings},
+            "dataPrepCounts": {
+                "skuCount": len(sku_ids),
+                "metricCount": len(selected_metrics),
+                "mixCount": len(selected_mixes),
+                "lineCount": len(selected_lines),
+                "bucketCount": len(selected_buckets),
+                "dayCount": len(T),
+            },
             "sources": sources,
         }
 
 
 # -----------------------------------------------------------------------------
-# Excel fallback for local/manual scenarios
+# Short-term demand file fallback for local/manual scenarios
 # -----------------------------------------------------------------------------
 
 
-def load_short_term_demand_from_excel(
+def load_short_term_demand_from_table(
     short_term_file: Path,
     P: Sequence[str],
     week1_dates: Sequence[pd.Timestamp],
-    sheet_name: int | str = 0,
-    start_row: int = 0,
 ) -> Dict[tuple[str, pd.Timestamp], float]:
-    """Fallback parser for the existing block-formatted Excel layout.
+    """Load short-term demand rows from a flat file.
 
-    This remains available for manual scenarios while the worker is being
-    migrated to API-backed inputs.
+    The file is expected to contain one demand record per row with columns
+    similar to: sku, demand, type, dueDate.
     """
 
-    df = pd.read_excel(short_term_file, sheet_name=sheet_name, header=None)
-    if start_row > 0:
-        df = df.iloc[start_row:].reset_index(drop=True)
-
-    date_column_map = {
-        week1_dates[0]: {"sku_col": 3, "demand_col": 5},
-        week1_dates[1]: {"sku_col": 8, "demand_col": 10},
-        week1_dates[2]: {"sku_col": 13, "demand_col": 15},
-        week1_dates[3]: {"sku_col": 18, "demand_col": 20},
-        week1_dates[4]: {"sku_col": 23, "demand_col": 25},
-        week1_dates[5]: {"sku_col": 28, "demand_col": 30},
-    }
-
     demand: Dict[tuple[str, pd.Timestamp], float] = {}
-    for _, row in df.iterrows():
-        for day, cols in date_column_map.items():
-            raw_sku = row.iloc[cols["sku_col"]]
-            raw_demand = row.iloc[cols["demand_col"]]
-            if pd.isna(raw_sku) or pd.isna(raw_demand):
-                continue
-
-            sku = _clean_str(raw_sku)
-            if not sku or sku not in P:
-                continue
-
-            try:
-                amount = float(raw_demand)
-            except (TypeError, ValueError):
-                continue
-
-            demand[(sku, day)] = demand.get((sku, day), 0.0) + amount
+    records = extract_short_term_demand_records(short_term_file, P, week1_dates)
+    for record in records:
+        sku = _clean_str(record.get("skuId"))
+        due_date = _as_date(record.get("dueDate"))
+        amount = _safe_float(record.get("demandValue"))
+        if not sku or due_date is None or amount is None:
+            continue
+        demand[(sku, due_date)] = demand.get((sku, due_date), 0.0) + amount
 
     return demand
+
+
+load_short_term_demand_from_excel = load_short_term_demand_from_table
 
 
 # -----------------------------------------------------------------------------
@@ -976,6 +1371,7 @@ def get_model_inputs(
     sku_ids: Optional[Sequence[str]] = None,
     endpoints: Optional[ApiEndpoints] = None,
     use_demo_fallbacks: bool = True,
+    progress_callback: Optional[Callable[[str, Optional[str], Optional[Dict[str, Any]]], None]] = None,
 ) -> Dict[str, Any]:
     prep = SchedulingWorkerDataPrep(
         endpoints=endpoints or ApiEndpoints(),
@@ -988,4 +1384,5 @@ def get_model_inputs(
         horizon_days=horizon_days,
         plant_id=plant_id,
         sku_ids=sku_ids,
+        progress_callback=progress_callback,
     )

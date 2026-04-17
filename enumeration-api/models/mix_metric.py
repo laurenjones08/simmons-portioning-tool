@@ -106,7 +106,7 @@ class MixMetric(BaseModel):
 
     @model_validator(mode="after")
     def validate_sku_keys_match_unit_plan(self):
-        """Require skuKeys and ensure it exactly matches SKUs present in unitPlan."""
+        """Require skuKeys when present and ensure it matches SKUs present in unitPlan."""
         unit_plan_skus = [str(item.sku).strip() for item in self.unit_plan]
         if any(not sku for sku in unit_plan_skus):
             raise ValueError("unitPlan items must contain non-empty sku values")
@@ -115,7 +115,8 @@ class MixMetric(BaseModel):
         expected_skus = list(dict.fromkeys(unit_plan_skus))
 
         if self.sku_keys is None or len(self.sku_keys) == 0:
-            raise ValueError("skuKeys must be explicitly provided and match unitPlan SKUs")
+            self.sku_keys = expected_skus
+            return self
 
         normalized_sku_keys = [str(sku).strip() for sku in self.sku_keys]
         if any(not sku for sku in normalized_sku_keys):

@@ -270,6 +270,92 @@ def delete_line(line_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Bucket Usage  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_bucket_usage(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/bucket-usage/search", json=criteria)
+    return resp.json()
+
+
+def create_bucket_usage(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/bucket-usage", json=payload)
+    return resp.json()
+
+
+def update_bucket_usage(bucket_usage_id: str, payload: dict) -> dict:
+    resp = _request("PUT", f"{SCHEDULING_API_URL}/bucket-usage/{bucket_usage_id}", json=payload)
+    return resp.json()
+
+
+def delete_bucket_usage(bucket_usage_id: str) -> dict:
+    resp = _request("DELETE", f"{SCHEDULING_API_URL}/bucket-usage/{bucket_usage_id}")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Scheduling Decisions  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_scheduling_decisions(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/scheduling-decisions/search", json=criteria)
+    return resp.json()
+
+
+def create_scheduling_decision(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/scheduling-decisions", json=payload)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Scheduling Outputs  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_scheduling_outputs(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/scheduling-outputs/search", json=criteria)
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# SKU Demands  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_sku_demands(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands/search", json=criteria)
+    return resp.json()
+
+
+def create_sku_demand(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands", json=payload)
+    return resp.json()
+
+
+def get_scheduling_job(job_id: str) -> dict:
+    resp = _request("GET", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}")
+    return resp.json()
+
+
+def submit_scheduling_job(payload: dict) -> dict:
+    """Submit a scheduling optimization job.
+
+    Required payload keys:
+    - runId (str): human-readable run label
+    Optional:
+    - planStartDate (str, YYYY-MM-DD): start date of planning horizon
+    - horizonDays (int): number of days to schedule (default 12)
+    - saveCsv (bool): whether to write CSV outputs
+    - outputDir (str): output directory path
+    """
+    resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs", json=payload)
+    return resp.json()
+
+
+def cancel_scheduling_job(job_id: str) -> dict:
+    resp = _request("POST", f"{SCHEDULING_WORKER_API_URL}/jobs/{job_id}/cancel")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
 # Available WIP  (Scheduling API)
 # ---------------------------------------------------------------------------
 
@@ -330,6 +416,15 @@ def search_monthly_contract_demands(criteria: dict) -> list[dict]:
     resp = _request(
         "POST",
         f"{SCHEDULING_API_URL}/monthly-contracts/search",
+        json=criteria,
+    )
+    return resp.json()
+
+
+def search_monthly_contract_demands_bulk(criteria: dict) -> list[dict]:
+    resp = _request(
+        "POST",
+        f"{SCHEDULING_API_URL}/monthly-contracts/bulk-search",
         json=criteria,
     )
     return resp.json()

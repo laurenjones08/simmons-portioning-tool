@@ -33,7 +33,7 @@ class SKUDemandService:
         return SKUDemand(**document)
 
     def search(self, criteria: SKUDemandSearchCriteria) -> List[SKUDemand]:
-        mongo_criteria: Dict[str, Any] = criteria.model_dump(by_alias=True, exclude_none=True)
+        mongo_criteria: Dict[str, Any] = criteria.model_dump(by_alias=True, exclude_none=True, mode="json")
         return [SKUDemand(**doc) for doc in self.repository.search(mongo_criteria)]
 
     def bulk_create(self, payload: SKUDemandBulkImportRequest) -> SKUDemandBulkImportResponse:

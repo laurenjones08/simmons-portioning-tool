@@ -1,3 +1,7 @@
+from numpy_compat import ensure_numpy_legacy_aliases
+
+ensure_numpy_legacy_aliases()
+
 from pyomo.environ import value
 import pandas as pd
 import os
@@ -86,7 +90,7 @@ def extract_pattern_mix_by_date(model):
     return pd.DataFrame(rows)
 
 
-def extract_production_vs_demand(model, D_short, D_week1, week1_dates):
+def extract_production_vs_demand(model, D_short, D_week1, week1_dates, bird_type):
     rows = []
 
     week1_date_set = set(week1_dates)
@@ -102,6 +106,7 @@ def extract_production_vs_demand(model, D_short, D_week1, week1_dates):
             rows.append({
                 "date": format_date(t),
                 "sku": str(p),
+                "bird_type": bird_type[str(p)] if str(p) in bird_type else bird_type[p],
                 "produced_lbs": round(produced, 3),
                 "short_term_demand_lbs": round(short_dem, 3) if t in week1_date_set else 0.0,
                 "week1_demand_lbs": round(week1_dem, 3) if t in week1_date_set else 0.0,
@@ -231,6 +236,7 @@ def extract_all_results(model, inputs):
         D_short=inputs["D_short"],
         D_week1=inputs["D_week1"],
         week1_dates=inputs["week1_dates"],
+        bird_type=inputs["bird_type"],
     )
 
     monthly_contract_df = extract_monthly_contract_summary(

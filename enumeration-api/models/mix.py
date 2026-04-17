@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class LineType(str, Enum):
     """Supported manufacturing line types for mix execution."""
 
+    DSI = "DSI"
     DSI884 = "DSI884"
     DSI888 = "DSI888"
     DB20 = "DB20"
