@@ -1,14 +1,4 @@
-import json
-import os
-from urllib import error as urllib_error
-from urllib import request as urllib_request
-
 import pandas as pd
-
-
-SCHEDULING_API_URL = os.getenv(
-    "SCHEDULING_API_URL", "http://localhost:8080/api/scheduling"
-)
 
 
 def load_short_term_demand(short_term_file, P, week1_dates, sheet_name=0, start_row=0):
@@ -86,59 +76,6 @@ def build_week1_demand(P, week1_dates, D_short):
     return D_week1
 
 
-def _fetch_monthly_contract_rows():
-    """
-    Load monthly contract demand rows from the scheduling API.
-
-    Returns an empty list when the API is unavailable so the model can still
-    run with zero default demand.
-    """
-    try:
-        payload = json.dumps({}).encode("utf-8")
-        req = urllib_request.Request(
-            f"{SCHEDULING_API_URL}/monthly-contracts/search",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib_request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            return data if isinstance(data, list) else []
-    except (urllib_error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
-        return []
-
-
-def _build_monthly_contract_demand(P, M):
-    """
-    Build the SKU/month contract demand map expected by the model.
-    """
-    contract_rows = _fetch_monthly_contract_rows()
-    contract: dict[tuple[str, pd.Period], float] = {}
-
-    for row in contract_rows:
-        sku_id = str(row.get("skuId", "")).strip()
-        year_month = str(row.get("yearMonth", "")).strip()
-        if not sku_id or sku_id not in P or not year_month:
-            continue
-
-        try:
-            month = pd.Period(year_month, freq="M")
-        except (TypeError, ValueError):
-            continue
-
-        if month not in M:
-            continue
-
-        try:
-            demand_lbs = float(row.get("demandLbs", 0.0))
-        except (TypeError, ValueError):
-            continue
-
-        contract[(sku_id, month)] = demand_lbs
-
-    return contract
-
-
 def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon_days=12):
     """
     plan_start_date:
@@ -175,6 +112,39 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         "B 540-590", "B 590-640", "B 640-690", "B 690-1000"
     ]
 
+    big_allowed = {
+        "A": 1,
+        "B": 1,
+        "C": 0,
+        "D": 1,
+        "E": 0,
+        "F": 1,
+        "G": 1,
+        "H": 0,
+    }
+
+    small_allowed = {
+        "A": 0,
+        "B": 1,
+        "C": 1,
+        "D": 0,
+        "E": 1,
+        "F": 1,
+        "G": 0,
+        "H": 1,
+    }
+
+    bird_type = {}
+    for p in P:
+        if big_allowed[p] == 1 and small_allowed[p] == 1:
+            bird_type[p] = "all"
+        elif big_allowed[p] == 1:
+            bird_type[p] = "big"
+        elif small_allowed[p] == 1:
+            bird_type[p] = "small"
+        else:
+            bird_type[p] = "none"
+
     # --- Build real production dates (Mon-Sat only) ---
     start_date = pd.Timestamp(plan_start_date)
     all_calendar_days = pd.date_range(start=start_date, periods=40, freq="D")
@@ -189,7 +159,32 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     month_of_day = {d: d.to_period("M") for d in T}
 
     # --- Monthly contractual demand keyed by month period ---
-    monthly_contract = _build_monthly_contract_demand(P, M)
+    # Replace these example values with your real monthly contract data
+    monthly_contract = {
+        ("A", pd.Period("2026-01", freq="M")): 3000,
+        ("A", pd.Period("2026-02", freq="M")): 3200,
+        ("B", pd.Period("2026-01", freq="M")): 2200,
+        ("B", pd.Period("2026-02", freq="M")): 2400,
+        ("C", pd.Period("2026-01", freq="M")): 2600,
+        ("C", pd.Period("2026-02", freq="M")): 2700,
+        ("D", pd.Period("2026-01", freq="M")): 2100,
+        ("D", pd.Period("2026-02", freq="M")): 2300,
+        ("E", pd.Period("2026-01", freq="M")): 3400,
+        ("E", pd.Period("2026-02", freq="M")): 3500,
+        ("F", pd.Period("2026-01", freq="M")): 2000,
+        ("F", pd.Period("2026-02", freq="M")): 2150,
+        ("G", pd.Period("2026-01", freq="M")): 3100,
+        ("G", pd.Period("2026-02", freq="M")): 3250,
+        ("H", pd.Period("2026-01", freq="M")): 2500,
+        ("H", pd.Period("2026-02", freq="M")): 2600,
+    }
+
+    # Keep only months actually present in the horizon
+    monthly_contract = {
+        (p, m): v
+        for (p, m), v in monthly_contract.items()
+        if m in M
+    }
 
     # --- Bucket assigned to each decision ---
     #Mix Bucket assignment -> Mix Metric API
@@ -378,4 +373,7 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         "L_delay": L_delay,
         "line_throughput": line_throughput,
         "gamma": gamma,
+        "big_allowed": big_allowed,
+        "small_allowed": small_allowed,
+        "bird_type": bird_type,
     }

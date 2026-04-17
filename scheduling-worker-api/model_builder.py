@@ -1,3 +1,7 @@
+from numpy_compat import ensure_numpy_legacy_aliases
+
+ensure_numpy_legacy_aliases()
+
 from pyomo.environ import *
 
 
@@ -9,6 +13,8 @@ def build_model(
     month_of_day,
     week1_dates,
     line_throughput,
+    big_allowed,
+    small_allowed,
     gamma=1.0
 ):
     """
@@ -63,6 +69,9 @@ def build_model(
     m.line_of_k = Param(m.K, initialize=line_of_k, within=m.L)
     m.line_throughput = Param(m.L, initialize=line_throughput, within=PositiveReals)
 
+    m.big_allowed = Param(m.P, initialize=big_allowed, within=Binary)
+    m.small_allowed = Param(m.P, initialize=small_allowed, within=Binary)
+
     # month_of_day is easier as a plain Python dict for filtering
     month_of_day_dict = dict(month_of_day)
 
@@ -77,6 +86,12 @@ def build_model(
 
     # dev[p,t] = |prod[p,t] - D_week1[p,t]| for week 1 only
     m.dev = Var(m.P, m.Week1Dates, domain=NonNegativeReals)
+
+    # prod_big[p,t] = lbs of sku p produced from big bird on date t
+    m.prod_big = Var(m.P, m.T, domain=NonNegativeReals)
+
+    # prod_small[p,t] = lbs of sku p produced from small bird on date t
+    m.prod_small = Var(m.P, m.T, domain=NonNegativeReals)
 
     # =========================
     # Constraints
@@ -151,6 +166,21 @@ def build_model(
 
     m.DevNegConstraint = Constraint(m.P, m.Week1Dates, rule=dev_neg_rule)
 
+    # 8) Big/Small Bird Split
+    def production_split_rule(m, p, t):
+        return m.prod[p, t] == m.prod_big[p, t] + m.prod_small[p, t]
+
+    m.ProductionSplitConstraint = Constraint(m.P, m.T, rule=production_split_rule)
+
+    def big_eligibility_rule(m, p, t):
+        return m.prod_big[p, t] <= 1000000 * m.big_allowed[p]
+
+    m.BigEligibilityConstraint = Constraint(m.P, m.T, rule=big_eligibility_rule)
+
+    def small_eligibility_rule(m, p, t):
+        return m.prod_small[p, t] <= 1000000 * m.small_allowed[p]
+
+    m.SmallEligibilityConstraint = Constraint(m.P, m.T, rule=small_eligibility_rule)
     # =========================
     # Objective Function
     # =========================

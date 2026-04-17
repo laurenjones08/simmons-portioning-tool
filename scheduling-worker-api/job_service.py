@@ -4,6 +4,8 @@ import json
 import logging
 import sys
 import threading
+import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
@@ -13,6 +15,7 @@ from bson import ObjectId
 from pymongo.database import Database
 
 from config import get_settings
+from data_prep import ApiEndpoints, SchedulingApiClient, extract_short_term_demand_records
 from models.job import ArtifactFile, CreateJobRequest, JobStatus, JobStatusResponse
 from repositories.job_repository import JobRepository
 from storage import build_download_url, dataframe_to_csv_bytes, upload_csv_artifacts
@@ -21,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _job_lock = threading.Lock()
 _active_job_id: Optional[str] = None
+_MAX_ERROR_MESSAGE_CHARS = 500
 
 
 def _now() -> datetime:
@@ -53,6 +57,13 @@ def _build_artifact_prefix(request: CreateJobRequest) -> str:
     if prefix:
         return prefix
     return "outputs"
+
+
+def _truncate_error_message(message: str, limit: int = _MAX_ERROR_MESSAGE_CHARS) -> str:
+    cleaned = " ".join(str(message or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip() + " ..."
 
 
 def _normalize_sku_ids(sku_ids: List[str]) -> List[str]:
@@ -103,11 +114,71 @@ def _validate_job_skus(plant_id: str, sku_ids: List[str]) -> List[str]:
     return normalized_ids
 
 
+def _save_short_term_demands(request: CreateJobRequest) -> Optional[Dict[str, Any]]:
+    if not request.short_term_file:
+        return None
+
+    path = Path(request.short_term_file)
+    if not path.exists():
+        raise ValueError(f"Short-term demand file not found: {request.short_term_file}")
+
+    records = extract_short_term_demand_records(path, request.sku_ids)
+    if not records:
+        logger.info("No short-term demand rows matched the uploaded file for job %s", request.run_id)
+        return {"total": 0, "successful": 0, "failed": 0, "errors": []}
+
+    endpoints = ApiEndpoints()
+    client = SchedulingApiClient(endpoints.scheduling_api_url, endpoints.timeout_seconds)
+    response = client.bulk_create_sku_demands(records)
+
+    total = int(response.get("total", len(records)))
+    successful = int(response.get("successful", 0))
+    failed = int(response.get("failed", max(0, total - successful)))
+    errors = response.get("errors", []) or []
+
+    if failed or errors:
+        logger.warning(
+            "Short-term demand save for job %s completed with issues: successful=%s failed=%s",
+            request.run_id,
+            successful,
+            failed,
+        )
+    else:
+        logger.info("Saved %s short-term demand rows for job %s", successful, request.run_id)
+
+    return {
+        "total": total,
+        "successful": successful,
+        "failed": failed,
+        "errors": errors,
+    }
+
+
 def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> None:
     global _active_job_id
     repo = JobRepository(db)
+    job_started = time.perf_counter()
+
+    def progress_callback(stage: str, message: Optional[str] = None, details: Optional[Dict[str, Any]] = None) -> None:
+        detail_payload = dict(details or {})
+        timings = detail_payload.pop("timings", None)
+        if timings is not None:
+            normalized_timings = {str(key): float(value) for key, value in dict(timings).items()}
+            normalized_timings["job_elapsed"] = round(time.perf_counter() - job_started, 3)
+        else:
+            normalized_timings = {"job_elapsed": round(time.perf_counter() - job_started, 3)}
+        repo.update_progress(
+            job_id,
+            current_stage=stage,
+            stage_message=message,
+            stage_details=detail_payload,
+            timings=normalized_timings,
+        )
+
     try:
         repo.mark_running(job_id)
+        progress_callback("short_term_demand", "Saving short-term demand file rows, if provided.")
+        short_term_demand_result = _save_short_term_demands(request)
         _ensure_scheduling_path()
         from run_model import run_for_job  # type: ignore
 
@@ -120,6 +191,7 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
             horizon_days=request.horizon_days,
             plant_id=request.plant_id,
             sku_ids=request.sku_ids,
+            progress_callback=progress_callback,
         )
 
         artifact_bucket = None
@@ -127,6 +199,7 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         artifact_keys: List[str] = []
         artifact_files: List[Dict[str, Any]] = []
         if request.save_csv:
+            progress_callback("artifact_upload", "Uploading CSV artifacts.")
             csv_payloads = {
                 name: dataframe_to_csv_bytes(df)
                 for name, df in results.get("outputs", {}).items()
@@ -159,6 +232,8 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         inputs_payload["shortTermFile"] = request.short_term_file
         inputs_payload["plantId"] = request.plant_id
         inputs_payload["skuIds"] = request.sku_ids
+        if short_term_demand_result is not None:
+            inputs_payload["savedShortTermDemand"] = short_term_demand_result
 
         artifact_payload: Dict[str, Any] = {}
         artifact_payload["bucket"] = artifact_bucket
@@ -166,6 +241,7 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         artifact_payload["keys"] = artifact_keys
         artifact_payload["files"] = artifact_files
         artifact_payload["savedCsv"] = request.save_csv
+        artifact_payload["timings"] = results.get("timings", {})
         output_payload["inputs"] = inputs_payload  # type: ignore[assignment]
         output_payload["artifacts"] = artifact_payload  # type: ignore[assignment]
         repo.store_results(job_id, request.run_id, output_payload)
@@ -180,6 +256,10 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
                         "artifactPrefix": artifact_prefix,
                         "artifactKeys": artifact_keys,
                         "artifactFiles": artifact_files,
+                        "timings": {
+                            **{str(key): float(value) for key, value in dict(results.get("timings", {})).items()},
+                            "job_elapsed": round(time.perf_counter() - job_started, 3),
+                        },
                         "updatedAt": _now(),
                     }
                 },
@@ -187,8 +267,9 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
             repo.mark_completed(job_id)
             logger.info("Scheduling job %s completed successfully", job_id)
     except Exception as exc:
+        error_traceback = traceback.format_exc()
         logger.exception("Scheduling job %s failed: %s", job_id, exc)
-        repo.mark_failed(job_id, str(exc))
+        repo.mark_failed(job_id, _truncate_error_message(str(exc)), error_traceback)
     finally:
         _active_job_id = None
 
@@ -227,9 +308,15 @@ class JobService:
                 "tee": request.tee,
                 "planStartDate": request.plan_start_date,
                 "horizonDays": request.horizon_days,
+                "currentStage": "pending",
+                "stageMessage": "Scheduling job is queued.",
+                "stageDetails": {},
+                "stageUpdatedAt": now,
+                "timings": {},
                 "plantId": request.plant_id,
                 "skuIds": sku_ids,
                 "errorMessage": None,
+                "errorTraceback": None,
                 "resultsCollection": "scheduling_results",
                 "artifactBucket": None,
                 "artifactPrefix": None,

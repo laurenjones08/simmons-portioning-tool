@@ -41,6 +41,8 @@ from api_client import (
     create_line,
     update_line,
     delete_line,
+    search_bucket_usage,
+    search_monthly_contract_demands_bulk,
 )
 
 
@@ -196,6 +198,16 @@ class TestBucketFunctions:
             search_buckets({})
         assert exc_info.value.status_code == 500
         assert exc_info.value.detail == "db error"
+
+    @patch("api_client.requests.request")
+    def test_search_bucket_usage(self, mock_req):
+        mock_req.return_value = _mock_response(200, [{"bucketId": "B 0-390"}])
+        result = search_bucket_usage({"bucketId": "B 0-390"})
+        args, kwargs = mock_req.call_args
+        assert args[0] == "POST"
+        assert "bucket-usage/search" in args[1]
+        assert kwargs["json"] == {"bucketId": "B 0-390"}
+        assert result == [{"bucketId": "B 0-390"}]
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +485,18 @@ class TestLineFunctions:
         assert args[0] == "DELETE"
         assert args[1].endswith("/lines/DSI884")
         assert result["deleted"] is True
+
+
+class TestMonthlyContractFunctions:
+    @patch("api_client.requests.request")
+    def test_search_monthly_contract_demands_bulk(self, mock_req):
+        mock_req.return_value = _mock_response(200, [{"skuId": "50624"}])
+        result = search_monthly_contract_demands_bulk({"skuIds": ["50624"], "yearMonths": ["2026-01"]})
+        args, kwargs = mock_req.call_args
+        assert args[0] == "POST"
+        assert "monthly-contracts/bulk-search" in args[1]
+        assert kwargs["json"] == {"skuIds": ["50624"], "yearMonths": ["2026-01"]}
+        assert result == [{"skuId": "50624"}]
 
 
 # ---------------------------------------------------------------------------

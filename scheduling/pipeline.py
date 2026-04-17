@@ -46,9 +46,10 @@ def run_pipeline(
         month_of_day=inputs["month_of_day"],
         week1_dates=inputs["week1_dates"],
         line_throughput=inputs["line_throughput"],
+        big_allowed=inputs["big_allowed"],
+        small_allowed=inputs["small_allowed"],
         gamma=inputs["gamma"],
     )
-
     # 3. Solve
     solve_results = solve_model(model, solver_name="highs", tee=tee)
 

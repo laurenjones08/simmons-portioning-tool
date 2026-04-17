@@ -1,13 +1,19 @@
 """Business logic layer for MIX operations."""
 
 from typing import List, Optional, Dict, Iterable
+import logging
 
+from bson import ObjectId
+from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
 from models.cut_strategy import CutStrategy
 from models.mix import MIX, MixCreate, MixSearchCriteria, MixUpdate
 from repositories.cut_strategy_repository import CutStrategyRepository
 from repositories.mix_repository import MixRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class MixService:
@@ -75,7 +81,28 @@ class MixService:
 
     def get_mix_by_id(self, mix_id: str) -> Optional[MIX]:
         mix_doc = self.repository.get_by_id(mix_id)
-        return MIX(**mix_doc) if mix_doc else None
+        return self._safe_parse_mix(mix_doc, f"get_by_id({mix_id})")
+
+    @staticmethod
+    def _normalize_mix_doc(doc: dict) -> dict:
+        """Normalize legacy Mongo types to the string fields expected by MIX."""
+        normalized = dict(doc)
+        for key in ("_id", "cutStrategyID", "skuSetKey"):
+            value = normalized.get(key)
+            if isinstance(value, ObjectId):
+                normalized[key] = str(value)
+        return normalized
+
+    @classmethod
+    def _safe_parse_mix(cls, doc: Optional[dict], context: str) -> Optional[MIX]:
+        """Parse a raw mix document, skipping invalid legacy records."""
+        if doc is None:
+            return None
+        try:
+            return MIX(**cls._normalize_mix_doc(doc))
+        except ValidationError as exc:
+            logger.warning("Skipping invalid mix document during %s: %s", context, exc)
+            return None
 
     def search_mixes(self, criteria: MixSearchCriteria) -> List[MIX]:
         raw = criteria.model_dump(by_alias=True, exclude_none=True)
@@ -87,7 +114,12 @@ class MixService:
             mongo_criteria["skuKeys"] = sku_trade_number
 
         docs = self.repository.search(mongo_criteria)
-        return [MIX(**doc) for doc in docs]
+        parsed: List[MIX] = []
+        for doc in docs:
+            mix = self._safe_parse_mix(doc, "search")
+            if mix is not None:
+                parsed.append(mix)
+        return parsed
 
     def update_mix(self, mix_id: str, payload: MixUpdate) -> Optional[MIX]:
         mix = MIX(_id=mix_id, **payload.model_dump(by_alias=True))

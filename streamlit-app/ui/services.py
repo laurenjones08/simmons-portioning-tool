@@ -1,0 +1,81 @@
+"""Lightweight service wrappers for Streamlit UI pages.
+
+These wrappers call the existing `api_client` functions and provide
+small convenience helpers used by the UI. Keep this thin — do not reimplement
+business logic.
+"""
+import os
+import sys
+from typing import Any
+
+# Ensure we can import api_client when loaded from the pages folder
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from api_client import (  # noqa: E402
+    search_mixes,
+    search_mix_metrics,
+    list_jobs,
+    list_scheduling_jobs,
+    search_scheduling_decisions,
+    search_scheduling_outputs,
+)
+
+
+def get_recent_mixes(limit: int = 10) -> list[dict]:
+    try:
+        mixes = search_mixes({}) or []
+        mixes_sorted = sorted(mixes, key=lambda m: m.get("createdAt", ""), reverse=True)
+        return mixes_sorted[:limit]
+    except Exception:
+        return []
+
+
+def get_recent_enum_jobs(limit: int = 5) -> list[dict]:
+    try:
+        jobs = list_jobs() or []
+        return sorted(jobs, key=lambda j: j.get("createdAt", ""), reverse=True)[:limit]
+    except Exception:
+        return []
+
+
+def get_recent_sched_jobs(limit: int = 5) -> list[dict]:
+    try:
+        jobs = list_scheduling_jobs() or []
+        return sorted(jobs, key=lambda j: j.get("createdAt", ""), reverse=True)[:limit]
+    except Exception:
+        return []
+
+
+def get_kpis_sample() -> dict[str, Any]:
+    """Build a small set of KPIs using available mix, job, and scheduling endpoints."""
+    kpis: dict[str, Any] = {
+        "candidate_count": 0,
+        "avg_upgrade": None,
+        "recent_enum_jobs": [],
+        "recent_sched_jobs": [],
+        "scheduling_decision_count": 0,
+    }
+
+    mixes = get_recent_mixes(limit=5)
+    kpis["candidate_count"] = len(mixes)
+
+    if mixes:
+        try:
+            metrics = search_mix_metrics({"mixId": mixes[0].get("_id")}) or []
+            if metrics:
+                upgrades = [m.get("upgradePercentage") for m in metrics if m.get("upgradePercentage") is not None]
+                if upgrades:
+                    kpis["avg_upgrade"] = sum(upgrades) / len(upgrades)
+        except Exception:
+            kpis["avg_upgrade"] = None
+
+    kpis["recent_enum_jobs"] = get_recent_enum_jobs()
+    kpis["recent_sched_jobs"] = get_recent_sched_jobs()
+
+    try:
+        decisions = search_scheduling_decisions({}) or []
+        kpis["scheduling_decision_count"] = len(decisions)
+    except Exception:
+        kpis["scheduling_decision_count"] = 0
+
+    return kpis
+

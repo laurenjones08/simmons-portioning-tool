@@ -65,6 +65,76 @@ db.bootstrap_metadata.updateOne({ _id: 'mongodb-bootstrap-archive-applied' }, { 
 }
 
 Write-Host ""
+Write-Host "Seeding SKU data from sample CSV..." -ForegroundColor Yellow
+
+$seedScript = @'
+import csv, json, urllib.request, urllib.error, os, sys
+
+csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "old", "sample-data", "Customer Spec Details(Colab Model Sample) (2).csv")
+api_url = "http://localhost:8080/api/enumeration/skus"
+
+if not os.path.exists(csv_path):
+    print(f"SKU CSV not found at: {csv_path}")
+    sys.exit(1)
+
+loaded, skipped, errors = 0, 0, 0
+with open(csv_path, encoding="utf-8") as f:
+    for row in csv.DictReader(f):
+        parts = [p.strip() for p in row["AllowedParts"].split(",") if p.strip()]
+        payload = {
+            "_id": row["TradeNumber"],
+            "tradeNumber": row["TradeNumber"],
+            "customerName": row["CustomerName"],
+            "customerType": row["CustomerType"],
+            "productType": row["ProductType"],
+            "unitsPerCut": int(row["UnitsPerCut"]),
+            "prodPlant": row["ProdPlant"],
+            "minWeight": float(row["MinWeight"]),
+            "maxWeight": float(row["MaxWeight"]),
+            "targetWeight": float(row["TargetWeight"]),
+            "birdSize": row.get("BirdSize", ""),
+            "allowedParts": parts,
+        }
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(api_url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            loaded += 1
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                skipped += 1
+            else:
+                errors += 1
+                print(f"ERR {row['TradeNumber']}: {e.code} {e.read()[:200]}")
+
+print(f"SKU seed complete: {loaded} loaded, {skipped} skipped (duplicate), {errors} errors")
+'@
+
+$seedFile = Join-Path $PSScriptRoot "seed_skus_tmp.py"
+Set-Content -Path $seedFile -Encoding utf8 -Value $seedScript
+
+# Find python - prefer venv, fall back to system python
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$pythonPaths = @(
+    (Join-Path $repoRoot ".venv\Scripts\python.exe"),
+    "python",
+    "python3"
+)
+$pythonExe = $null
+foreach ($p in $pythonPaths) {
+    if (Get-Command $p -ErrorAction SilentlyContinue) { $pythonExe = $p; break }
+    if (Test-Path $p) { $pythonExe = $p; break }
+}
+
+if ($pythonExe) {
+    & $pythonExe $seedFile
+} else {
+    Write-Host "Python not found — skipping SKU seed. Run manually: python scripts/seed_skus_tmp.py" -ForegroundColor Yellow
+}
+Remove-Item $seedFile -ErrorAction SilentlyContinue
+
+Write-Host ""
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "Database reinitialization complete!" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green

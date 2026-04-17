@@ -1,7 +1,14 @@
+import time
+
 from data_prep import get_model_inputs
 from model_builder import build_model
 from solver import solve_model, check_solution
 from results import extract_all_results, save_results
+
+
+def _report_progress(progress_callback, stage, message, details=None):
+    if progress_callback is not None:
+        progress_callback(stage, message, details or {})
 
 
 def run_pipeline(
@@ -14,8 +21,13 @@ def run_pipeline(
     sku_ids=None,
     plan_start_date="2026-01-05",
     horizon_days=12,
+    progress_callback=None,
 ):
+    timings = {}
+
     # 1. Load / prepare inputs
+    _report_progress(progress_callback, "data_prep", "Preparing model inputs.")
+    started = time.perf_counter()
     inputs = get_model_inputs(
         job=job,
         short_term_file=short_term_file,
@@ -24,9 +36,22 @@ def run_pipeline(
         plant_id=plant_id,
         sku_ids=sku_ids,
         use_demo_fallbacks=False,
+        progress_callback=progress_callback,
+    )
+    timings["data_prep"] = round(time.perf_counter() - started, 3)
+    _report_progress(
+        progress_callback,
+        "data_prep_complete",
+        "Prepared model inputs.",
+        {
+            "timings": {**inputs.get("dataPrepTimings", {}), "pipeline_data_prep": timings["data_prep"]},
+            "counts": inputs.get("dataPrepCounts", {}),
+        },
     )
 
     # 2. Build model
+    _report_progress(progress_callback, "model_build", "Building optimization model.")
+    started = time.perf_counter()
     model = build_model(
         inputs["P"],
         inputs["T"],
@@ -46,26 +71,66 @@ def run_pipeline(
         month_of_day=inputs["month_of_day"],
         week1_dates=inputs["week1_dates"],
         line_throughput=inputs["line_throughput"],
+        big_allowed=inputs["big_allowed"],
+        small_allowed=inputs["small_allowed"],
         gamma=inputs["gamma"],
     )
-
+    timings["model_build"] = round(time.perf_counter() - started, 3)
+    _report_progress(
+        progress_callback,
+        "model_build_complete",
+        "Built optimization model.",
+        {
+            "timings": timings,
+            "counts": {
+                "skuCount": len(inputs["P"]),
+                "metricCount": len(inputs["K"]),
+                "lineCount": len(inputs["L"]),
+                "bucketCount": len(inputs["B"]),
+                "dayCount": len(inputs["T"]),
+                "monthCount": len(inputs["M"]),
+            },
+        },
+    )
     # 3. Solve
+    _report_progress(progress_callback, "solver", "Solving optimization model.")
+    started = time.perf_counter()
     solve_results = solve_model(model, solver_name="highs", tee=tee)
+    timings["solve"] = round(time.perf_counter() - started, 3)
+    _report_progress(
+        progress_callback,
+        "solver_complete",
+        "Solver finished.",
+        {
+            "timings": timings,
+            "solverStatus": str(solve_results.solver.status),
+            "terminationCondition": str(solve_results.solver.termination_condition),
+        },
+    )
 
     # 4. Check solve status
     check_solution(solve_results)
 
     # 5. Extract outputs
+    _report_progress(progress_callback, "extract_results", "Extracting scheduling outputs.")
+    started = time.perf_counter()
     output_dfs = extract_all_results(model, inputs)
+    timings["extract_results"] = round(time.perf_counter() - started, 3)
 
     # 6. Save outputs if requested
     if save_csv:
+        _report_progress(progress_callback, "save_results", "Saving scheduling CSV outputs.")
+        started = time.perf_counter()
         save_results(output_dfs, output_dir=output_dir)
+        timings["save_results"] = round(time.perf_counter() - started, 3)
 
     # 7. Return everything
+    timings["total_pipeline"] = round(sum(timings.values()), 3)
+    _report_progress(progress_callback, "pipeline_complete", "Scheduling pipeline completed.", {"timings": timings})
     return {
         "inputs": inputs,
         "model": model,
         "solve_results": solve_results,
         "outputs": output_dfs,
+        "timings": timings,
     }
