@@ -44,21 +44,64 @@ class JobRepository:
         try:
             self.collection.update_one(
                 {"_id": job_id},
-                {"$set": {"status": "running", "startedAt": datetime.utcnow(), "updatedAt": datetime.utcnow()}},
+                {
+                    "$set": {
+                        "status": "running",
+                        "startedAt": datetime.utcnow(),
+                        "updatedAt": datetime.utcnow(),
+                        "currentStage": "starting",
+                        "stageMessage": "Scheduling worker accepted the job.",
+                        "stageUpdatedAt": datetime.utcnow(),
+                    }
+                },
             )
         except PyMongoError as exc:
             raise Exception(f"Database error marking scheduling job running: {exc}")
+
+    def update_progress(
+        self,
+        job_id: str,
+        current_stage: str,
+        stage_message: Optional[str] = None,
+        stage_details: Optional[Dict[str, Any]] = None,
+        timings: Optional[Dict[str, float]] = None,
+    ) -> None:
+        try:
+            updates: Dict[str, Any] = {
+                "currentStage": current_stage,
+                "updatedAt": datetime.utcnow(),
+                "stageUpdatedAt": datetime.utcnow(),
+            }
+            if stage_message is not None:
+                updates["stageMessage"] = stage_message
+            if stage_details is not None:
+                updates["stageDetails"] = stage_details
+            if timings is not None:
+                updates["timings"] = timings
+
+            self.collection.update_one({"_id": job_id}, {"$set": updates})
+        except PyMongoError as exc:
+            raise Exception(f"Database error updating scheduling job progress: {exc}")
 
     def mark_completed(self, job_id: str) -> None:
         try:
             self.collection.update_one(
                 {"_id": job_id},
-                {"$set": {"status": "completed", "finishedAt": datetime.utcnow(), "updatedAt": datetime.utcnow()}},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "finishedAt": datetime.utcnow(),
+                        "updatedAt": datetime.utcnow(),
+                        "currentStage": "completed",
+                        "stageMessage": "Scheduling job completed successfully.",
+                        "stageUpdatedAt": datetime.utcnow(),
+                    }
+                },
             )
         except PyMongoError as exc:
             raise Exception(f"Database error marking scheduling job completed: {exc}")
 
-    def mark_failed(self, job_id: str, error_message: str) -> None:
+    def mark_failed(self, job_id: str, error_message: str, error_traceback: Optional[str] = None) -> None:
         try:
             self.collection.update_one(
                 {"_id": job_id},
@@ -66,7 +109,11 @@ class JobRepository:
                     "$set": {
                         "status": "failed",
                         "finishedAt": datetime.utcnow(),
+                        "currentStage": "failed",
+                        "stageMessage": error_message,
+                        "stageUpdatedAt": datetime.utcnow(),
                         "errorMessage": error_message,
+                        "errorTraceback": error_traceback,
                         "updatedAt": datetime.utcnow(),
                     }
                 },
@@ -78,7 +125,16 @@ class JobRepository:
         try:
             result = self.collection.update_one(
                 {"_id": job_id, "status": {"$in": ["pending", "running"]}},
-                {"$set": {"status": "cancelled", "finishedAt": datetime.utcnow(), "updatedAt": datetime.utcnow()}},
+                {
+                    "$set": {
+                        "status": "cancelled",
+                        "finishedAt": datetime.utcnow(),
+                        "updatedAt": datetime.utcnow(),
+                        "currentStage": "cancelled",
+                        "stageMessage": "Scheduling job was cancelled.",
+                        "stageUpdatedAt": datetime.utcnow(),
+                    }
+                },
             )
             return result.modified_count > 0
         except PyMongoError as exc:
@@ -97,4 +153,3 @@ class JobRepository:
             )
         except PyMongoError as exc:
             raise Exception(f"Database error storing scheduling results: {exc}")
-

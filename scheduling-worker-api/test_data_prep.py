@@ -8,7 +8,12 @@ for module_name in ["data_prep"]:
     sys.modules.pop(module_name, None)
 sys.path.insert(0, str(ROOT / "scheduling-worker-api"))
 
-from data_prep import DataPrepSources, SchedulingWorkerDataPrep  # noqa: E402
+from data_prep import (  # noqa: E402
+    DataPrepSources,
+    SchedulingWorkerDataPrep,
+    extract_short_term_demand_records,
+    load_short_term_demand_from_table,
+)
 
 
 class StubPrep(SchedulingWorkerDataPrep):
@@ -44,12 +49,12 @@ class StubPrep(SchedulingWorkerDataPrep):
 
         class FakeEnumerationApi:
             def list_mixes(self):
-                return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "beltSpeed": 11.0}]
+                return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
 
             def list_buckets(self):
                 return [{"name": "bucket-1"}]
 
-            def list_mix_metrics(self):
+            def list_mix_metrics(self, sku_trade_numbers=None):
                 return [
                     {
                         "_id": "mix-1:bucket-1",
@@ -106,4 +111,711 @@ def test_prepare_builds_api_backed_inputs():
     assert inputs["V"]["mix-1:bucket-1"] == 4.2
     assert inputs["R"]["mix-1:bucket-1"] == 11.0
     assert inputs["monthly_contract"][("SKU-1", pd.Period("2026-01", freq="M"))] == 500.0
+    assert inputs["big_allowed"]["SKU-1"] == 0
+    assert inputs["small_allowed"]["SKU-1"] == 1
+    assert inputs["bird_type"]["SKU-1"] == "small"
+
+
+def test_prepare_assigns_line_by_mix_mfg_type(monkeypatch):
+    chosen_lines = []
+
+    def fake_choice(values):
+        chosen_lines.append(list(values))
+        return values[0]
+
+    monkeypatch.setattr("data_prep.random.choice", fake_choice)
+
+    class LinePrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-dsi-884",
+                            "friendlyName": "DSI 884 Line",
+                            "lineType": "DSI884",
+                            "plant": "FSP",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 9000.0,
+                            "isActive": True,
+                        },
+                        {
+                            "lineId": "line-dsi-888",
+                            "friendlyName": "DSI 888 Line",
+                            "lineType": "DSI888",
+                            "plant": "FSP",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 8500.0,
+                            "isActive": True,
+                        },
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_mixes(self):
+                    return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}]
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        }
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = LinePrep(use_demo_fallbacks=True)
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert chosen_lines == [["line-dsi-888"]]
+    assert inputs["line_of_k"]["mix-1:bucket-1"] == "line-dsi-888"
+
+
+def test_prepare_uses_cut_strategy_line_type_when_mix_mfg_type_is_generic_dsi(monkeypatch):
+    chosen_lines = []
+
+    def fake_choice(values):
+        chosen_lines.append(list(values))
+        return values[0]
+
+    monkeypatch.setattr("data_prep.random.choice", fake_choice)
+
+    class StrategyLinePrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-dsi-884",
+                            "friendlyName": "DSI 884 Line",
+                            "lineType": "DSI884",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 9000.0,
+                            "isActive": True,
+                        },
+                        {
+                            "lineId": "line-dsi-888",
+                            "friendlyName": "DSI 888 Line",
+                            "lineType": "DSI888",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 8500.0,
+                            "isActive": True,
+                        },
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_mixes(self):
+                    return [
+                        {
+                            "_id": "mix-1",
+                            "mfgType": "DSI",
+                            "cutStrategyID": "strategy-884",
+                            "reqPlant": "VBS",
+                            "reqBirdSize": "SB",
+                            "beltSpeed": 11.0,
+                        }
+                    ]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}]
+
+                def list_cut_strategies(self):
+                    return [
+                        {
+                            "_id": "strategy-884",
+                            "lineType": "DSI884",
+                        }
+                    ]
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        }
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = StrategyLinePrep(use_demo_fallbacks=True)
+    inputs = prep.prepare(
+        job={
+            "plantId": "VBS",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert chosen_lines == [["line-dsi-884"]]
+    assert inputs["line_of_k"]["mix-1:bucket-1"] == "line-dsi-884"
+
+
+def test_prepare_prefers_line_permitted_cut_strategy_ids(monkeypatch):
+    chosen_lines = []
+
+    def fake_choice(values):
+        chosen_lines.append(list(values))
+        return values[0]
+
+    monkeypatch.setattr("data_prep.random.choice", fake_choice)
+
+    class PermittedStrategyPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-exact-strategy",
+                            "friendlyName": "Strategy Line",
+                            "lineType": "DSI884",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 9000.0,
+                            "permittedCutStrategyIds": ["strategy-884"],
+                            "isActive": True,
+                        },
+                        {
+                            "lineId": "line-other",
+                            "friendlyName": "Other Line",
+                            "lineType": "DSI884",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 8500.0,
+                            "permittedCutStrategyIds": ["strategy-other"],
+                            "isActive": True,
+                        },
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
+                def list_mixes(self):
+                    return [
+                        {
+                            "_id": "mix-1",
+                            "mfgType": "DSI",
+                            "cutStrategyID": "strategy-884",
+                            "reqPlant": "VBS",
+                            "reqBirdSize": "SB",
+                            "beltSpeed": 11.0,
+                        }
+                    ]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}]
+
+                def list_cut_strategies(self):
+                    return [{"_id": "strategy-884", "lineType": "DSI884"}]
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        }
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = PermittedStrategyPrep(use_demo_fallbacks=True)
+    inputs = prep.prepare(
+        job={
+            "plantId": "VBS",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert chosen_lines == [["line-exact-strategy"]]
+    assert inputs["line_of_k"]["mix-1:bucket-1"] == "line-exact-strategy"
+
+
+def test_load_short_term_demand_from_table_uses_row_format(tmp_path):
+    short_term_file = tmp_path / "short_term_demand.csv"
+    pd.DataFrame(
+        [
+            {"sku": "SKU-1", "demand": 10, "type": "Short", "dueDate": "2026-01-05"},
+            {"sku": "SKU-1", "demand": 5, "type": "short", "dueDate": "2026-01-05"},
+            {"sku": "SKU-1", "demand": 99, "type": "Long", "dueDate": "2026-01-05"},
+            {"sku": "SKU-2", "demand": 12, "type": "Short", "dueDate": "2026-01-12"},
+            {"sku": "SKU-3", "demand": 8, "type": "Short", "dueDate": "2026-01-06"},
+        ]
+    ).to_csv(short_term_file, index=False)
+
+    week1_dates = [pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-06")]
+    demand = load_short_term_demand_from_table(short_term_file, ["SKU-1", "SKU-3"], week1_dates)
+
+    assert demand[("SKU-1", pd.Timestamp("2026-01-05"))] == 15.0
+    assert demand[("SKU-3", pd.Timestamp("2026-01-06"))] == 8.0
+    assert ("SKU-2", pd.Timestamp("2026-01-12")) not in demand
+
+
+def test_extract_short_term_demand_records_returns_api_payload_shape(tmp_path):
+    short_term_file = tmp_path / "short_term_demand.csv"
+    pd.DataFrame(
+        [
+            {"sku": "SKU-1", "demand": 10, "type": "Short", "dueDate": "2026-01-05"},
+            {"sku": "SKU-1", "demand": 5, "type": "short", "dueDate": "2026-01-06"},
+            {"sku": "SKU-1", "demand": 99, "type": "Long", "dueDate": "2026-01-05"},
+            {"sku": "SKU-2", "demand": 12, "type": "Short", "dueDate": "2026-01-12"},
+        ]
+    ).to_csv(short_term_file, index=False)
+
+    records = extract_short_term_demand_records(short_term_file, ["SKU-1"], [pd.Timestamp("2026-01-05")])
+
+    assert records == [
+        {
+            "skuId": "SKU-1",
+            "demandValue": 10.0,
+            "demandType": "Short",
+            "dueDate": "2026-01-05",
+        }
+    ]
+
+
+def test_prepare_combines_bird_requirements_across_mixes():
+    class BirdPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [{"lineId": "line-1", "friendlyName": "Line 1", "lineType": "DSI888", "plant": "FSP", "hoursOfLaborAvailablePerShift": 7.5, "lineThroughput": 9000.0, "isActive": True}]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_mixes(self):
+                    return [
+                        {"_id": "mix-sb", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0},
+                        {"_id": "mix-bb", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "BB", "beltSpeed": 11.0},
+                    ]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}]
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-sb:bucket-1",
+                            "mixId": "mix-sb",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                        {
+                            "_id": "mix-bb:bucket-1",
+                            "mixId": "mix-bb",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = BirdPrep(use_demo_fallbacks=True)
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert inputs["big_allowed"]["SKU-1"] == 1
+    assert inputs["small_allowed"]["SKU-1"] == 1
+    assert inputs["bird_type"]["SKU-1"] == "all"
+
+
+def test_prepare_filters_out_metrics_with_no_matching_active_line():
+    class RunnableOnlyPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-dsi-888",
+                            "friendlyName": "DSI 888 Line",
+                            "lineType": "DSI888",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 8500.0,
+                            "isActive": True,
+                        }
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
+                def list_mixes(self):
+                    return [
+                        {"_id": "mix-dsi", "mfgType": "DSI888", "reqPlant": "VBS", "reqBirdSize": "SB", "beltSpeed": 11.0},
+                        {"_id": "mix-db20", "mfgType": "DB20", "reqPlant": "VBS", "reqBirdSize": "SB", "beltSpeed": 11.0},
+                    ]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}]
+
+                def list_cut_strategies(self):
+                    return []
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-dsi:bucket-1",
+                            "mixId": "mix-dsi",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                        {
+                            "_id": "mix-db20:bucket-1",
+                            "mixId": "mix-db20",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = RunnableOnlyPrep(use_demo_fallbacks=False)
+    inputs = prep.prepare(
+        job={
+            "plantId": "VBS",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert inputs["K"] == ["mix-dsi:bucket-1"]
+    assert inputs["line_of_k"] == {"mix-dsi:bucket-1": "line-dsi-888"}
+
+
+def test_prepare_filters_out_metrics_with_missing_mix_documents():
+    class OrphanMetricPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "VBS-DSI888",
+                            "friendlyName": "Van Buren DSI888",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 8.0,
+                            "lineThroughput": 8500.0,
+                            "isActive": True,
+                        }
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
+                def list_mixes(self):
+                    return [
+                        {"_id": "mix-live", "mfgType": "DSI888", "reqPlant": "VBS", "reqBirdSize": "SB", "beltSpeed": 11.0},
+                    ]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}]
+
+                def list_cut_strategies(self):
+                    return []
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-live:bucket-1",
+                            "mixId": "mix-live",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                        {
+                            "_id": "mix-missing:bucket-1",
+                            "mixId": "mix-missing",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = OrphanMetricPrep(use_demo_fallbacks=False)
+    inputs = prep.prepare(
+        job={
+            "plantId": "VBS",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert inputs["K"] == ["mix-live:bucket-1"]
+    assert inputs["line_of_k"] == {"mix-live:bucket-1": "VBS-DSI888"}
+
+
+def test_prepare_maps_mix_level_line_assignments_back_to_metric_ids():
+    class SharedMixPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
+
+                def search_sku_demands(self, criteria=None):
+                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-dsi-888",
+                            "friendlyName": "DSI 888 Line",
+                            "lineType": "DSI888",
+                            "plant": "VBS",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "lineThroughput": 8500.0,
+                            "isActive": True,
+                        }
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
+                def list_mixes(self):
+                    return [
+                        {"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "VBS", "reqBirdSize": "SB", "beltSpeed": 11.0},
+                    ]
+
+                def list_buckets(self):
+                    return [{"name": "bucket-1"}, {"name": "bucket-2"}]
+
+                def list_cut_strategies(self):
+                    return []
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                        {
+                            "_id": "mix-1:bucket-2",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-2",
+                            "value": 4.4,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], months[0]): 500.0}
+
+    prep = SharedMixPrep(use_demo_fallbacks=False)
+    inputs = prep.prepare(
+        job={
+            "plantId": "VBS",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert inputs["K"] == ["mix-1:bucket-1", "mix-1:bucket-2"]
+    assert inputs["line_of_k"] == {
+        "mix-1:bucket-1": "line-dsi-888",
+        "mix-1:bucket-2": "line-dsi-888",
+    }
+
+
+def test_select_mix_metrics_requires_mix_skus_to_be_subset_of_job_skus():
+    class SubsetMetricPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            return None
+
+    prep = SubsetMetricPrep(use_demo_fallbacks=False)
+    sources = DataPrepSources(
+        mix_metrics=[
+            {
+                "_id": "mix-single:bucket-1",
+                "mixId": "mix-single",
+                "bucketId": "bucket-1",
+                "skuKeys": ["SKU-1"],
+            },
+            {
+                "_id": "mix-subset:bucket-1",
+                "mixId": "mix-subset",
+                "bucketId": "bucket-1",
+                "skuKeys": ["SKU-1", "SKU-2"],
+            },
+            {
+                "_id": "mix-superset:bucket-1",
+                "mixId": "mix-superset",
+                "bucketId": "bucket-1",
+                "skuKeys": ["SKU-1", "SKU-3"],
+            },
+            {
+                "_id": "mix-unit-plan-fallback:bucket-1",
+                "mixId": "mix-unit-plan-fallback",
+                "bucketId": "bucket-1",
+                "unitPlan": [
+                    {"sku": "SKU-1", "pctOfTotal": 50.0, "totalWeightInPlan": 1.0},
+                    {"sku": "SKU-2", "pctOfTotal": 50.0, "totalWeightInPlan": 1.0},
+                ],
+            },
+        ]
+    )
+
+    selected = prep._select_mix_metrics(sources, ["SKU-1", "SKU-2"])
+
+    assert [metric["_id"] for metric in selected] == [
+        "mix-single:bucket-1",
+        "mix-subset:bucket-1",
+        "mix-unit-plan-fallback:bucket-1",
+    ]
 

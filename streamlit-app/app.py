@@ -25,7 +25,9 @@ st.session_state.ui_sidebar_nav = page
 page_map = {
     "Home":                  ("views.home",                  "Simmons Portioning Decision Support — Overview"),
     "Enumeration Dashboard": ("views.enumeration_dashboard", "Portioning Decision Support System"),
-    "Scheduling Dashboard":  ("views.scheduling_dashboard",  "Scheduling Decision Support"),
+    "Scheduling Dashboard":  ("views.scheduling_dashboard",  "Scheduling control center"),
+    "Scheduling Create":     ("views.scheduling_create",     "Create a scheduling run"),
+    "Scheduling Insights":   ("views.scheduling_insights",   "Scheduling analytics and tables"),
     "Advanced Settings":     ("views.advanced_settings",     "Configuration and master data"),
     "Snapshot Comparison":   ("views.snapshot_comparison",   "Compare two enumeration snapshots side-by-side"),
     "Exports / Reports":     ("views.imports_exports",       "Data import and export tools"),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from pydantic import BaseModel, Field
@@ -73,7 +73,13 @@ class SchedulingJob(BaseModel):
     tee: bool = Field(default=False)
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays")
+    current_stage: Optional[str] = Field(default=None, alias="currentStage")
+    stage_message: Optional[str] = Field(default=None, alias="stageMessage")
+    stage_details: Dict[str, Any] = Field(default_factory=dict, alias="stageDetails")
+    stage_updated_at: Optional[datetime] = Field(default=None, alias="stageUpdatedAt")
+    timings: Dict[str, float] = Field(default_factory=dict, alias="timings")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
+    error_traceback: Optional[str] = Field(default=None, alias="errorTraceback")
     results_collection: str = Field(default="scheduling_results", alias="resultsCollection")
     plant_id: str = Field(..., alias="plantId")
     sku_ids: List[str] = Field(default_factory=list, alias="skuIds")
@@ -101,7 +107,13 @@ class JobStatusResponse(BaseModel):
     tee: bool = Field(default=False)
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays")
+    current_stage: Optional[str] = Field(default=None, alias="currentStage")
+    stage_message: Optional[str] = Field(default=None, alias="stageMessage")
+    stage_details: Dict[str, Any] = Field(default_factory=dict, alias="stageDetails")
+    stage_updated_at: Optional[datetime] = Field(default=None, alias="stageUpdatedAt")
+    timings: Dict[str, float] = Field(default_factory=dict, alias="timings")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
+    error_traceback: Optional[str] = Field(default=None, alias="errorTraceback")
     results_collection: str = Field(default="scheduling_results", alias="resultsCollection")
     plant_id: str = Field(..., alias="plantId")
     sku_ids: List[str] = Field(default_factory=list, alias="skuIds")
@@ -128,7 +140,13 @@ class JobStatusResponse(BaseModel):
             tee=job.tee,
             planStartDate=job.plan_start_date,
             horizonDays=job.horizon_days,
+            currentStage=job.current_stage,
+            stageMessage=job.stage_message,
+            stageDetails=job.stage_details,
+            stageUpdatedAt=job.stage_updated_at,
+            timings=job.timings,
             errorMessage=job.error_message,
+            errorTraceback=job.error_traceback,
             resultsCollection=job.results_collection,
             plantId=job.plant_id,
             skuIds=job.sku_ids,

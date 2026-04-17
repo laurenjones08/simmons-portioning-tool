@@ -270,6 +270,30 @@ def delete_line(line_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Bucket Usage  (Scheduling API)
+# ---------------------------------------------------------------------------
+
+def search_bucket_usage(criteria: dict) -> list[dict]:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/bucket-usage/search", json=criteria)
+    return resp.json()
+
+
+def create_bucket_usage(payload: dict) -> dict:
+    resp = _request("POST", f"{SCHEDULING_API_URL}/bucket-usage", json=payload)
+    return resp.json()
+
+
+def update_bucket_usage(bucket_usage_id: str, payload: dict) -> dict:
+    resp = _request("PUT", f"{SCHEDULING_API_URL}/bucket-usage/{bucket_usage_id}", json=payload)
+    return resp.json()
+
+
+def delete_bucket_usage(bucket_usage_id: str) -> dict:
+    resp = _request("DELETE", f"{SCHEDULING_API_URL}/bucket-usage/{bucket_usage_id}")
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
 # Scheduling Decisions  (Scheduling API)
 # ---------------------------------------------------------------------------
 
@@ -303,15 +327,6 @@ def search_sku_demands(criteria: dict) -> list[dict]:
 
 def create_sku_demand(payload: dict) -> dict:
     resp = _request("POST", f"{SCHEDULING_API_URL}/sku-demands", json=payload)
-    return resp.json()
-
-
-# ---------------------------------------------------------------------------
-# Scheduling Jobs  (Scheduling Worker API)
-# ---------------------------------------------------------------------------
-
-def list_scheduling_jobs() -> list[dict]:
-    resp = _request("GET", f"{SCHEDULING_WORKER_API_URL}/jobs")
     return resp.json()
 
 
@@ -401,6 +416,15 @@ def search_monthly_contract_demands(criteria: dict) -> list[dict]:
     resp = _request(
         "POST",
         f"{SCHEDULING_API_URL}/monthly-contracts/search",
+        json=criteria,
+    )
+    return resp.json()
+
+
+def search_monthly_contract_demands_bulk(criteria: dict) -> list[dict]:
+    resp = _request(
+        "POST",
+        f"{SCHEDULING_API_URL}/monthly-contracts/bulk-search",
         json=criteria,
     )
     return resp.json()
