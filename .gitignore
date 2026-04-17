@@ -12,3 +12,7 @@ settings.json
 *.pyc
 /streamlit-app/.hypothesis/
 *.pyc
+
+# Python packaging artifacts
+/*.egg-info/
+/**/*.egg-info/

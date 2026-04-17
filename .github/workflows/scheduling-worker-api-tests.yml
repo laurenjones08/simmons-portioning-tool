@@ -20,6 +20,8 @@ jobs:
   test-scheduling-worker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
