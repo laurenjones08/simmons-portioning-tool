@@ -1,5 +1,6 @@
 param(
     [string]$BaseUrl = $env:SCHEDULING_WORKER_API_URL,
+    [string]$SchedulingApiUrl = $env:SCHEDULING_API_URL,
     [string]$EnumerationApiUrl = $env:ENUMERATION_API_URL,
     [string]$PlantId = "VBS",
     [string[]]$SkuIds = @(),
@@ -7,13 +8,17 @@ param(
     [string]$OutputDir = "outputs",
     [int]$HorizonDays = 12,
     [int]$RandomSkuCount = 15,
+    [int]$RequestTimeoutSec = 0,
     [string]$PlanStartDate = (Get-Date).ToString("yyyy-MM-dd"),
     [switch]$SaveCsv,
     [switch]$Tee,
+    [switch]$DebugMode,
     [string]$ShortTermFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+$script:TranscriptStarted = $false
+$script:ExitCode = 0
 
 function Write-Info([string]$Message) {
     Write-Host "[info] $Message"
@@ -55,10 +60,69 @@ function Invoke-JsonRequest {
 
     $headers = @{ Accept = "application/json" }
     if ($Method -eq "GET") {
-        return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers
+        if ($RequestTimeoutSec -le 0) {
+            return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec 0
+        }
+        return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec $RequestTimeoutSec
     }
 
-    return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body
+    if ($RequestTimeoutSec -le 0) {
+        return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec 0
+    }
+    return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec $RequestTimeoutSec
+}
+
+function Save-DebugDataPrepDump {
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiBaseUrl,
+        [Parameter(Mandatory = $true)][string]$JobId,
+        [Parameter(Mandatory = $true)][string]$RunLabel
+    )
+
+    $debugUrl = "$ApiBaseUrl/jobs/$JobId/debug-data-prep"
+    $debugPath = Join-Path $script:ResolvedOutputDir "$RunLabel-debug-data-prep-$JobId.json"
+    try {
+        Invoke-WebRequest -Method Get `
+        -Uri $debugUrl `
+        -OutFile $debugPath
+        Write-Info "Saved debug dataprep dump to $debugPath"
+
+    } catch {
+        Write-Info "No debug dataprep dump was available at $debugUrl"
+        return
+    }
+}
+
+function Save-JobArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiBaseUrl,
+        [Parameter(Mandatory = $true)][string]$JobId,
+        [Parameter(Mandatory = $true)][string]$RunLabel
+    )
+
+    $artifacts = Invoke-JsonRequest -Method "GET" -Url "$ApiBaseUrl/jobs/$JobId/artifacts"
+    if (-not $artifacts) {
+        Write-Info "No CSV artifacts were returned for job $JobId"
+        return
+    }
+
+    foreach ($artifact in @($artifacts)) {
+        $artifactName = [string]$artifact.artifactName
+        $fileName = [string]$artifact.fileName
+        $downloadUrl = [string]$artifact.downloadUrl
+        if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
+            Write-Info "Skipping artifact $artifactName because no downloadUrl was returned"
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($fileName)) {
+            $fileName = "$artifactName.csv"
+        }
+
+        $artifactPath = Join-Path $script:ResolvedOutputDir "$RunLabel-$fileName"
+        Invoke-WebRequest -Method Get -Uri $downloadUrl -OutFile $artifactPath
+        Write-Info "Saved CSV artifact to $artifactPath"
+    }
 }
 
 function Get-RandomSkuIdsForPlant {
@@ -96,6 +160,14 @@ if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
     $BaseUrl = "http://localhost:8080/api/scheduling-worker"
 }
 
+if ([string]::IsNullOrWhiteSpace($SchedulingApiUrl)) {
+    if ($BaseUrl -match "/api/scheduling-worker/?$") {
+        $SchedulingApiUrl = ($BaseUrl -replace "/api/scheduling-worker/?$", "/api/scheduling")
+    } else {
+        $SchedulingApiUrl = "http://localhost:8080/api/scheduling"
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($EnumerationApiUrl)) {
     $EnumerationApiUrl = "http://localhost:8080/api/enumeration"
 }
@@ -103,6 +175,18 @@ if ([string]::IsNullOrWhiteSpace($EnumerationApiUrl)) {
 if ([string]::IsNullOrWhiteSpace($RunId)) {
     $RunId = "schedule-test-{0}" -f (Get-Date).ToString("yyyyMMdd-HHmmss")
 }
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$script:ResolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) {
+    $OutputDir
+} else {
+    Join-Path $repoRoot $OutputDir
+}
+New-Item -ItemType Directory -Path $script:ResolvedOutputDir -Force | Out-Null
+$logPath = Join-Path $script:ResolvedOutputDir "$RunId-script-output.log"
+Start-Transcript -Path $logPath -Force | Out-Null
+$script:TranscriptStarted = $true
+Write-Info "Capturing script output to $logPath"
 
 if (-not $SkuIds -or $SkuIds.Count -eq 0) {
     Write-Info "No SKU IDs provided; selecting $RandomSkuCount random SKUs for plant $PlantId from $EnumerationApiUrl"
@@ -117,6 +201,7 @@ $payload = [ordered]@{
     saveCsv = [bool]$SaveCsv.IsPresent
     outputDir = $OutputDir
     tee = [bool]$Tee.IsPresent
+    debugMode = [bool]$DebugMode.IsPresent
     planStartDate = $PlanStartDate
     horizonDays = $HorizonDays
 }
@@ -148,6 +233,10 @@ Write-Host ""
 Write-Host "Final job record:"
 $status | ConvertTo-Json -Depth 30
 
+if ($DebugMode.IsPresent) {
+    Save-DebugDataPrepDump -ApiBaseUrl $BaseUrl -JobId $jobId -RunLabel $RunId
+}
+
 if ($state -eq "failed") {
     Write-Host ""
     Write-Host "Failure message:"
@@ -161,8 +250,18 @@ if ($state -eq "failed") {
         }
         Write-Host $trace
     }
-    exit 1
+    $script:ExitCode = 1
+} else {
+    Write-Host ""
+    Write-Host "Job finished successfully."
+    Save-JobArtifacts -ApiBaseUrl $SchedulingApiUrl -JobId $jobId -RunLabel $RunId
 }
 
-Write-Host ""
-Write-Host "Job finished successfully."
+if ($script:TranscriptStarted) {
+    Stop-Transcript | Out-Null
+    $script:TranscriptStarted = $false
+}
+
+if ($script:ExitCode -ne 0) {
+    exit $script:ExitCode
+}

@@ -7,6 +7,7 @@ import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from urllib import error, request
 
@@ -16,6 +17,10 @@ import pandas as pd
 # -----------------------------------------------------------------------------
 # API client helpers
 # -----------------------------------------------------------------------------
+
+UPGRADE_MU_CONFIG_KEY = "enumeration.upgradeDistributionMu"
+UPGRADE_SIGMA_CONFIG_KEY = "enumeration.upgradeDistributionSigma"
+_STANDARD_NORMAL = NormalDist(mu=0.0, sigma=1.0)
 
 
 def _env_url(*names: str, default: str) -> str:
@@ -87,14 +92,6 @@ class BaseApiClient:
 
 
 class SchedulingApiClient(BaseApiClient):
-    def search_sku_demands(self, criteria: Optional[dict] = None) -> List[dict]:
-        return self._request_json("/sku-demands/search", method="POST", payload=criteria or {}) or []
-
-    def bulk_create_sku_demands(self, demands: Sequence[dict]) -> Dict[str, Any]:
-        payload = {"demands": list(demands)}
-        response = self._request_json("/sku-demands/bulk", method="POST", payload=payload)
-        return response or {"total": 0, "successful": 0, "failed": 0, "errors": []}
-
     def search_available_wip(self, criteria: Optional[dict] = None) -> List[dict]:
         return self._request_json("/available-wip/search", method="POST", payload=criteria or {}) or []
 
@@ -158,7 +155,6 @@ class DataPrepSources:
     mix_metrics: List[dict] = field(default_factory=list)
     lines: List[dict] = field(default_factory=list)
     configs: List[dict] = field(default_factory=list)
-    sku_demands: List[dict] = field(default_factory=list)
     available_wip: List[dict] = field(default_factory=list)
     bucket_usage: List[dict] = field(default_factory=list)
     scheduling_decisions: List[dict] = field(default_factory=list)
@@ -420,6 +416,17 @@ def _config_map(configs: Sequence[dict]) -> Dict[str, Any]:
     return mapping
 
 
+def calculate_bucket_mean(lb: float, ub: float, mu: float, sigma: float) -> float:
+    alpha = (lb - mu) / sigma
+    beta = (ub - mu) / sigma
+    denominator = _STANDARD_NORMAL.cdf(beta) - _STANDARD_NORMAL.cdf(alpha)
+    if denominator <= 1e-12:
+        return min(max(mu, lb), ub)
+
+    numerator = _STANDARD_NORMAL.pdf(alpha) - _STANDARD_NORMAL.pdf(beta)
+    return mu + sigma * (numerator / denominator)
+
+
 def _job_value(job: Any, *names: str, default: Any = None) -> Any:
     if job is None:
         return default
@@ -488,6 +495,25 @@ def _metric_unit_plan(metric: Dict[str, Any]) -> List[Dict[str, Any]]:
     return list(metric.get("unitPlan") or metric.get("unit_plan") or [])
 
 
+def _bucket_id(bucket: Dict[str, Any]) -> str:
+    return _clean_str(bucket.get("_id") or bucket.get("bucketId") or bucket.get("name"))
+
+
+def _bucket_min_weight(bucket: Dict[str, Any]) -> Optional[float]:
+    value = _safe_float(bucket.get("minWeight"))
+    if value is not None:
+        return value
+    return _safe_float(bucket.get("targetWeight"))
+
+
+def _bucket_target_weight(bucket: Dict[str, Any]) -> Optional[float]:
+    return _safe_float(bucket.get("targetWeight"))
+
+
+def _bucket_max_weight(bucket: Dict[str, Any]) -> Optional[float]:
+    return _safe_float(bucket.get("maxWeight"))
+
+
 def _mix_bird_size(mix: Dict[str, Any]) -> str:
     return _clean_str(mix.get("reqBirdSize") or mix.get("birdSize") or mix.get("req_bird_size")).upper()
 
@@ -508,6 +534,10 @@ def _line_type(line: Dict[str, Any]) -> str:
         or line.get("friendlyName")
         or line.get("line_id")
     )
+
+
+def _line_units_available(line: Dict[str, Any]) -> Optional[float]:
+    return _safe_float(line.get("unitsAvailable") or line.get("units_available"))
 
 
 def _cut_strategy_id(mix: Dict[str, Any]) -> str:
@@ -644,11 +674,6 @@ class SchedulingWorkerDataPrep:
         due_dates: Sequence[pd.Timestamp] | None = None,
         progress_callback: Optional[Callable[[str, Optional[str], Optional[Dict[str, Any]]], None]] = None,
     ) -> DataPrepSources:
-        sku_demand_criteria: Dict[str, Any] = {"demandType": "Short"}
-        if sku_ids:
-            sku_demand_criteria["skuIds"] = list(sku_ids)
-        if due_dates:
-            sku_demand_criteria["dueDates"] = _date_strings(due_dates)
         api_timings: Dict[str, float] = {}
 
         def timed_fetch(name: str, loader: Callable[[], List[dict]]) -> List[dict]:
@@ -672,7 +697,6 @@ class SchedulingWorkerDataPrep:
             mix_metrics=timed_fetch("mix_metrics", lambda: self.enumeration_api.list_mix_metrics(sku_ids)),
             lines=timed_fetch("lines", self.config_api.list_lines),
             configs=timed_fetch("configs", self.config_api.list_configs),
-            sku_demands=timed_fetch("sku_demands", lambda: self.scheduling_api.search_sku_demands(sku_demand_criteria)),
             api_timings=api_timings,
         )
 
@@ -821,33 +845,12 @@ class SchedulingWorkerDataPrep:
         parts: Sequence[str],
         short_term_file: Optional[str],
     ) -> Dict[tuple[str, pd.Timestamp], float]:
-        demand: Dict[tuple[str, pd.Timestamp], float] = {}
-        week1_date_set = set(week1_dates)
-
-        for record in sources.sku_demands:
-            sku = _clean_str(record.get("skuId") or record.get("sku_id"))
-            due_date = _as_date(record.get("dueDate") or record.get("due_date"))
-            demand_type = _clean_str(record.get("demandType") or record.get("demand_type"))
-            amount = _safe_float(record.get("demandValue") or record.get("demand_value"))
-            if not sku or due_date is None or amount is None:
-                continue
-            if sku not in parts:
-                continue
-            if week1_date_set and due_date not in week1_date_set:
-                continue
-            if demand_type and demand_type.lower() != "short":
-                continue
-            demand[(sku, due_date)] = demand.get((sku, due_date), 0.0) + amount
-
-        if demand:
-            return demand
-
         if short_term_file:
             path = Path(short_term_file)
             if path.exists():
                 return load_short_term_demand_from_table(path, parts, week1_dates)
 
-        return demand
+        return {}
 
     def _build_wip_map(self, sources: DataPrepSources, buckets: Sequence[str], dates: Sequence[pd.Timestamp], plant_id: Optional[str]) -> Dict[tuple[str, pd.Timestamp], float]:
         wip: Dict[tuple[str, pd.Timestamp], float] = {}
@@ -930,6 +933,29 @@ class SchedulingWorkerDataPrep:
             return {(sku_id, month): defaults.get((sku_id, month), 0.0) for sku_id in sku_ids for month in months}
         return contract
 
+    def _filter_skus_with_positive_monthly_contract(
+        self,
+        sku_ids: Sequence[str],
+        months: Sequence[pd.Period],
+        monthly_contract: Dict[tuple[str, pd.Period], float],
+    ) -> tuple[List[str], Dict[tuple[str, pd.Period], float], List[str]]:
+        kept_skus: List[str] = []
+        removed_skus: List[str] = []
+        filtered_contract: Dict[tuple[str, pd.Period], float] = {}
+
+        for sku_id in sku_ids:
+            total_contract = sum(monthly_contract.get((sku_id, month), 0.0) for month in months)
+            if total_contract > 0:
+                kept_skus.append(sku_id)
+                for month in months:
+                    value = monthly_contract.get((sku_id, month), 0.0)
+                    if value:
+                        filtered_contract[(sku_id, month)] = value
+            else:
+                removed_skus.append(sku_id)
+
+        return kept_skus, filtered_contract, removed_skus
+
     def _build_bucket_of_k(self, metrics: Sequence[dict]) -> Dict[str, str]:
         mapping: Dict[str, str] = {}
         for metric in metrics:
@@ -941,11 +967,11 @@ class SchedulingWorkerDataPrep:
             return mapping
         return _demo_bucket_of_k() if self.use_demo_fallbacks else {}
 
-    def _build_line_of_k(
-            self,
-            mixes: Sequence[dict],
-            lines: Sequence[dict],
-            cut_strategies: Sequence[dict],
+    def _build_mix_line_assignments(
+        self,
+        mixes: Sequence[dict],
+        lines: Sequence[dict],
+        cut_strategies: Sequence[dict],
     ) -> Dict[str, str]:
         cut_strategy_lookup = {
             _clean_str(strategy.get("_id") or strategy.get("cutStrategyId")): strategy
@@ -987,13 +1013,44 @@ class SchedulingWorkerDataPrep:
             return mapping
         return _demo_line_of_k() if self.use_demo_fallbacks else {}
 
+    def _build_line_of_k(
+        self,
+        metrics: Sequence[dict],
+        mix_line_assignments: Dict[str, str],
+    ) -> Dict[str, str]:
+        mapping: Dict[str, str] = {}
+        for metric in metrics:
+            metric_id = _metric_id(metric)
+            mix_id = _metric_mix_id(metric)
+            line_id = mix_line_assignments.get(mix_id)
+            if metric_id and line_id:
+                mapping[metric_id] = line_id
+        if mapping:
+            return mapping
+        return _demo_line_of_k() if self.use_demo_fallbacks else {}
+
     def _filter_runnable_metrics(
         self,
         metrics: Sequence[dict],
         line_of_k: Dict[str, str],
     ) -> List[dict]:
-        runnable_mix_ids = set(line_of_k)
-        return [metric for metric in metrics if _metric_mix_id(metric) in runnable_mix_ids]
+        runnable_metric_ids = set(line_of_k)
+        return [metric for metric in metrics if _metric_id(metric) in runnable_metric_ids]
+
+    def _filter_metrics_with_valid_target_buckets(
+        self,
+        metrics: Sequence[dict],
+        buckets: Sequence[dict],
+    ) -> List[dict]:
+        bucket_lookup = {_bucket_id(bucket): bucket for bucket in buckets if _bucket_id(bucket)}
+        filtered: List[dict] = []
+        for metric in metrics:
+            bucket_doc = bucket_lookup.get(_metric_bucket_id(metric), {})
+            target_weight = _bucket_target_weight(bucket_doc)
+            if target_weight is None or target_weight <= 0:
+                continue
+            filtered.append(metric)
+        return filtered
 
     def _build_yield_map(self, metrics: Sequence[dict], parts: Sequence[str]) -> Dict[tuple[str, str], float]:
         part_set = set(parts)
@@ -1033,8 +1090,21 @@ class SchedulingWorkerDataPrep:
             return values
         return _demo_value_map() if self.use_demo_fallbacks else {}
 
-    def _build_rate_map(self, mixes: Sequence[dict], metrics: Sequence[dict]) -> Dict[str, float]:
+    def _build_rate_map(
+        self,
+        mixes: Sequence[dict],
+        metrics: Sequence[dict],
+        buckets: Sequence[dict],
+        lines: Sequence[dict],
+        configs: Sequence[dict],
+        line_of_k: Dict[str, str],
+    ) -> Dict[str, float]:
         mix_lookup = {_clean_str(mix.get("_id") or mix.get("mixId")): mix for mix in mixes}
+        bucket_lookup = {_bucket_id(bucket): bucket for bucket in buckets if _bucket_id(bucket)}
+        line_lookup = {_line_id(line): line for line in lines if _line_id(line)}
+        config_values = _config_map(configs)
+        upgrade_mu = _safe_float(config_values.get(UPGRADE_MU_CONFIG_KEY))
+        upgrade_sigma = _safe_float(config_values.get(UPGRADE_SIGMA_CONFIG_KEY))
         rates: Dict[str, float] = {}
         for metric in metrics:
             metric_id = _metric_id(metric)
@@ -1043,8 +1113,43 @@ class SchedulingWorkerDataPrep:
             belt_speed = _safe_float(mix_doc.get("beltSpeed") or mix_doc.get("belt_speed"))
             if belt_speed is None or belt_speed <= 0:
                 belt_speed = 1.0
-            # TODO: convert belt speed (feet/minute) to lbs/hour using the real production formula. For now, we will just use the belt speed as a proxy for the rate.
-            rates[metric_id] = belt_speed
+
+            bucket_doc = bucket_lookup.get(_metric_bucket_id(metric), {})
+            bucket_mean = None
+            bucket_min_weight = _bucket_min_weight(bucket_doc)
+            bucket_max_weight = _bucket_max_weight(bucket_doc)
+            if (
+                upgrade_mu is not None
+                and upgrade_mu > 0
+                and upgrade_sigma is not None
+                and upgrade_sigma > 0
+                and bucket_min_weight is not None
+                and bucket_max_weight is not None
+                and bucket_max_weight > bucket_min_weight
+            ):
+                bucket_mean = calculate_bucket_mean(
+                    lb=bucket_min_weight,
+                    ub=bucket_max_weight,
+                    mu=upgrade_mu,
+                    sigma=upgrade_sigma,
+                )
+            if bucket_mean is None or bucket_mean <= 0:
+                bucket_mean = _bucket_target_weight(bucket_doc)
+            if bucket_mean is None or bucket_mean <= 0:
+                bucket_mean = 1.0
+            else:
+                bucket_mean = bucket_mean / 453.6 # convert grams to lbs
+
+            upgrade_percentage = _safe_float(metric.get("upgradePercentage") or metric.get("upgrade_percentage"))
+            upgrade_ratio = (upgrade_percentage / 100.0) if upgrade_percentage is not None else 1.0
+
+            line_doc = line_lookup.get(line_of_k.get(metric_id, ""), {})
+            units_available = _line_units_available(line_doc)
+            if units_available is None or units_available <= 0:
+                units_available = 1.0
+
+            # lbs/hour = belt speed * 60 * avg breast weight * upgrade ratio * available line units
+            rates[metric_id] = belt_speed * 60.0 * bucket_mean * upgrade_ratio * units_available
         if rates:
             return rates
         return _demo_rate_map() if self.use_demo_fallbacks else {}
@@ -1151,6 +1256,25 @@ class SchedulingWorkerDataPrep:
         M = sorted({d.to_period("M") for d in T})
         month_of_day = {d: d.to_period("M") for d in T}
 
+        monthly_contract = self._build_monthly_contract(sku_ids, M)
+        sku_ids, monthly_contract, removed_contract_skus = self._filter_skus_with_positive_monthly_contract(
+            sku_ids,
+            M,
+            monthly_contract,
+        )
+        if removed_contract_skus:
+            _emit_progress(
+                progress_callback,
+                "data_prep_pruning_skus",
+                "Removing SKUs whose monthly contract is zero across the planning horizon.",
+                {
+                    "removedSkuIds": removed_contract_skus,
+                    "keptSkuCount": len(sku_ids),
+                },
+            )
+        if not sku_ids:
+            raise ValueError("No selected skuIds have a positive monthly contract for the planning horizon.")
+
         _emit_progress(progress_callback, "data_prep_loading_sources", "Loading dataprep sources from upstream APIs.")
         started = time.perf_counter()
         sources = self.load_sources(sku_ids, week1_dates, progress_callback=progress_callback)
@@ -1181,23 +1305,22 @@ class SchedulingWorkerDataPrep:
                 "selectedLineCount": len(selected_lines),
             },
         )
-        mix_line_of_k = self._build_line_of_k(selected_mixes, selected_lines, sources.cut_strategies)
-        selected_metrics = self._filter_runnable_metrics(selected_metrics, mix_line_of_k)
+        mix_line_assignments = self._build_mix_line_assignments(selected_mixes, selected_lines, sources.cut_strategies)
+        line_of_k = self._build_line_of_k(selected_metrics, mix_line_assignments)
+        selected_metrics = self._filter_runnable_metrics(selected_metrics, line_of_k)
+        selected_metrics = self._filter_metrics_with_valid_target_buckets(selected_metrics, sources.buckets)
         if not selected_metrics:
             if self.use_demo_fallbacks:
                 return self._prepare_demo_inputs(sku_ids, T, week1_dates, M)
             raise ValueError(
                 f"No runnable mix metrics found for skuIds {sku_ids} at plantId '{plant_id}'. "
-                "The selected plant does not have a matching active line for the available mixes."
+                "The selected plant does not have a matching active line for the available mixes, "
+                "or the remaining metrics referenced buckets with invalid targetWeight values."
             )
 
         selected_mix_ids = _normalize_ids(_metric_mix_id(metric) for metric in selected_metrics)
         selected_mixes = self._select_mixes(sources, selected_mix_ids)
-        line_of_k = {
-            _metric_id(metric): mix_line_of_k[_metric_mix_id(metric)]
-            for metric in selected_metrics
-            if _metric_mix_id(metric) in mix_line_of_k
-        }
+        line_of_k = self._build_line_of_k(selected_metrics, mix_line_assignments)
         prep_timings["filter_metrics"] = round(time.perf_counter() - overall_started - sum(prep_timings.values()), 3)
 
         selected_buckets = self._select_buckets(sources, selected_metrics, available_wip_rows)
@@ -1231,11 +1354,17 @@ class SchedulingWorkerDataPrep:
             }
 
         WIP = {(bucket, day): base_wip_by_bucket.get(bucket, 0.0) for bucket in selected_buckets for day in T}
-        monthly_contract = self._build_monthly_contract(sku_ids, M)
         bucket_of_k = self._build_bucket_of_k(selected_metrics)
         Y = self._build_yield_map(selected_metrics, sku_ids)
         V = self._build_value_map(selected_metrics)
-        R = self._build_rate_map(selected_mixes, selected_metrics)
+        R = self._build_rate_map(
+            selected_mixes,
+            selected_metrics,
+            sources.buckets,
+            selected_lines,
+            sources.configs,
+            line_of_k,
+        )
         base_hours_by_line, H, line_throughput = self._build_hours_and_throughput(selected_lines, T)
         gamma = self._build_gamma(sources.configs)
         prep_timings["assemble_inputs"] = round(time.perf_counter() - overall_started - sum(prep_timings.values()), 3)
@@ -1313,7 +1442,6 @@ class SchedulingWorkerDataPrep:
                 "bucketCount": len(selected_buckets),
                 "dayCount": len(T),
             },
-            "sources": sources,
         }
 
 

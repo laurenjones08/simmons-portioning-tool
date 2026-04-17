@@ -14,7 +14,7 @@ if SHARED_PATH.exists() and str(SHARED_PATH) not in sys.path:
 
 from config import get_settings
 from database import close_mongo_connection
-from routers import available_wip_router, bucket_usage_router, job_artifacts_router, monthly_contract_demand_router, scheduling_decision_router, scheduling_output_router, sku_demand_router
+from routers import available_wip_router, bucket_usage_router, job_artifacts_router, monthly_contract_demand_router, scheduling_decision_router, scheduling_output_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,11 +38,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Scheduling API",
     description="""
-    The Scheduling API stores demand, scheduling decisions, produced outputs, bucket usage records, and available WIP rows.
+    The Scheduling API stores monthly contract demand, scheduling decisions, produced outputs, bucket usage records, and available WIP rows.
 
     ## Collections
 
-    * **sku_demands**: Incoming SKU demand records
     * **scheduling_decisions**: Decision records for a mix, line, and date
     * **scheduling_outputs**: Produced output records by decision and SKU
     * **monthly_contracts**: Monthly contract demand by SKU and year-month
@@ -98,7 +97,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-app.include_router(sku_demand_router.router, prefix="/sku-demands", tags=["SKU Demands"])
 app.include_router(scheduling_decision_router.router, prefix="/scheduling-decisions", tags=["Scheduling Decisions"])
 app.include_router(scheduling_output_router.router, prefix="/scheduling-outputs", tags=["Scheduling Outputs"])
 app.include_router(monthly_contract_demand_router.router, prefix="/monthly-contracts", tags=["Monthly Contract Demands"])

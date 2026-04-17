@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from pymongo.collection import Collection
@@ -12,11 +12,14 @@ class JobRepository:
     def __init__(self, database: Database):
         self.collection: Collection = database["scheduling_jobs"]
         self.results_collection: Collection = database["scheduling_results"]
+        self.debug_collection: Collection = database["scheduling_debug_payloads"]
         self.collection.create_index([("status", 1)], name="idx_scheduling_job_status")
         self.collection.create_index([("runId", 1)], name="idx_scheduling_job_run_id")
         self.collection.create_index([("createdAt", -1)], name="idx_scheduling_job_created_at")
         self.results_collection.create_index([("runId", 1)], name="idx_scheduling_result_run_id")
         self.results_collection.create_index([("jobId", 1)], name="idx_scheduling_result_job_id")
+        self.debug_collection.create_index([("jobId", 1)], name="idx_scheduling_debug_job_id")
+        self.debug_collection.create_index([("expiresAt", 1)], name="ttl_scheduling_debug_expires", expireAfterSeconds=0)
 
     def insert(self, job_document: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -153,3 +156,32 @@ class JobRepository:
             )
         except PyMongoError as exc:
             raise Exception(f"Database error storing scheduling results: {exc}")
+
+    def get_results(self, job_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.results_collection.find_one({"jobId": job_id})
+        except PyMongoError as exc:
+            raise Exception(f"Database error retrieving scheduling results: {exc}")
+
+    def store_debug_dump(self, job_id: str, run_id: str, payload: Dict[str, Any], ttl_minutes: int = 5) -> None:
+        try:
+            self.debug_collection.replace_one(
+                {"jobId": job_id},
+                {
+                    "_id": job_id,
+                    "jobId": job_id,
+                    "runId": run_id,
+                    "createdAt": datetime.utcnow(),
+                    "expiresAt": datetime.utcnow() + timedelta(minutes=ttl_minutes),
+                    "payload": payload,
+                },
+                upsert=True,
+            )
+        except PyMongoError as exc:
+            raise Exception(f"Database error storing scheduling debug dump: {exc}")
+
+    def get_debug_dump(self, job_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.debug_collection.find_one({"jobId": job_id})
+        except PyMongoError as exc:
+            raise Exception(f"Database error retrieving scheduling debug dump: {exc}")

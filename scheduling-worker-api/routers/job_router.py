@@ -81,3 +81,25 @@ async def get_job_artifacts(job_id: str, service: JobService = Depends(_get_serv
     if artifacts is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return artifacts
+
+
+@router.get(
+    "/{job_id}/results",
+    summary="Get stored scheduling results payload",
+)
+async def get_job_results(job_id: str, service: JobService = Depends(_get_service)):
+    results = service.get_results(job_id)
+    if results is None:
+        raise HTTPException(status_code=404, detail=f"Results for job {job_id} not found")
+    return results
+
+
+@router.get(
+    "/{job_id}/debug-data-prep",
+    summary="Get short-lived dataprep debug dump",
+)
+async def get_job_debug_data_prep(job_id: str, service: JobService = Depends(_get_service)):
+    debug_dump = service.get_debug_dump(job_id)
+    if debug_dump is None:
+        raise HTTPException(status_code=404, detail=f"Debug dataprep dump for job {job_id} not found")
+    return debug_dump
