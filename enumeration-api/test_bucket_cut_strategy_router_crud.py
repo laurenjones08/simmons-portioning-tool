@@ -205,13 +205,16 @@ def test_cut_strategy_crud_flow():
 def test_cut_strategy_search_skips_invalid_legacy_documents():
     client, db = _make_test_client()
 
+    # "invalid-1" uses a lineType value that is not in the LineType enum, so it
+    # will be rejected by Pydantic validation and silently skipped.
+    # Different parts are used to avoid a unique-index conflict.
     db["cut_strategies"].insert_many(
         [
             {
                 "_id": "valid-1",
                 "name": "Valid Strategy",
                 "description": "ok",
-                "mfgType": "DSI",
+                "lineType": "DSI",
                 "hasNugget": False,
                 "beltSpeed": 1.0,
                 "parts": ["D", "R"],
@@ -221,11 +224,11 @@ def test_cut_strategy_search_skips_invalid_legacy_documents():
                 "_id": "invalid-1",
                 "name": "Legacy Bad Strategy",
                 "description": "bad",
-                "mfgType": "DSI888",
+                "lineType": "LEGACY_ONLY",
                 "hasNugget": False,
                 "beltSpeed": 1.0,
-                "parts": ["D", "R"],
-                "partsKey": "d-r",
+                "parts": ["K"],
+                "partsKey": "k",
             },
         ]
     )

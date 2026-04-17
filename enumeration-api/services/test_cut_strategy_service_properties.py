@@ -137,7 +137,7 @@ def test_cut_strategy_search_handles_objectid_documents():
             "_id": raw_id,
             "name": "Legacy Strategy",
             "description": "legacy",
-            "mfgType": "DB20",
+            "lineType": "DB20",
             "hasNugget": False,
             "beltSpeed": 1.0,
             "parts": ["K", " V"],
@@ -145,7 +145,7 @@ def test_cut_strategy_search_handles_objectid_documents():
         }
     )
 
-    result = service.search_cut_strategies(CutStrategySearchCriteria(mfgType="DB20"))
+    result = service.search_cut_strategies(CutStrategySearchCriteria(lineType="DB20"))
 
     assert len(result) == 1
     assert result[0].strategy_id == str(raw_id)
@@ -155,13 +155,16 @@ def test_cut_strategy_search_handles_objectid_documents():
 def test_cut_strategy_search_skips_invalid_mfgtype_documents():
     service, db = build_service()
 
+    # "invalid-1" uses a lineType value that is not in the LineType enum, so it
+    # will be rejected by Pydantic validation and silently skipped by the service.
+    # Different parts are used to avoid the unique-index conflict (partsKey + lineType + hasNugget).
     db["cut_strategies"].insert_many(
         [
             {
                 "_id": "valid-1",
                 "name": "Valid Strategy",
                 "description": "ok",
-                "mfgType": "DSI",
+                "lineType": "DSI",
                 "hasNugget": False,
                 "beltSpeed": 1.0,
                 "parts": ["D", "R"],
@@ -171,11 +174,11 @@ def test_cut_strategy_search_skips_invalid_mfgtype_documents():
                 "_id": "invalid-1",
                 "name": "Bad Legacy Strategy",
                 "description": "bad",
-                "mfgType": "DSI888",
+                "lineType": "LEGACY_ONLY",
                 "hasNugget": False,
                 "beltSpeed": 1.0,
-                "parts": ["D", "R"],
-                "partsKey": CutStrategyRepository.generate_parts_key(["D", "R"]),
+                "parts": ["K"],
+                "partsKey": CutStrategyRepository.generate_parts_key(["K"]),
             },
         ]
     )
@@ -189,12 +192,14 @@ def test_cut_strategy_search_skips_invalid_mfgtype_documents():
 def test_cut_strategy_get_by_id_returns_none_for_invalid_legacy_document():
     service, db = build_service()
 
+    # lineType "LEGACY_ONLY" is not a valid LineType enum value, so the document
+    # will fail Pydantic validation and the service will return None.
     db["cut_strategies"].insert_one(
         {
             "_id": "invalid-by-id",
             "name": "Bad Legacy Strategy",
             "description": "bad",
-            "mfgType": "DSI888",
+            "lineType": "LEGACY_ONLY",
             "hasNugget": False,
             "beltSpeed": 1.0,
             "parts": ["D", "R"],

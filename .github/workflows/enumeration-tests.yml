@@ -42,6 +42,13 @@ jobs:
           PYTHONPATH: .
         run: |
           python -m pytest -vv --durations=10 \
+            test_backfill_mix_metric_derived_fields.py \
+            test_bucket_cut_strategy_router_crud.py \
+            test_mix_metric_router_crud.py \
             test_router_integration.py \
-            models/test_mix_properties.py \
+            models/ \
+            services/test_bucket_service_properties.py \
+            services/test_cut_strategy_service_properties.py \
+            services/test_enumeration_staged_runner.py \
+            services/test_legacy_document_compatibility.py \
             services/test_mix_service_uniqueness.py

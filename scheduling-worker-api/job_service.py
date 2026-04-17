@@ -23,10 +23,12 @@ from repositories.job_repository import JobRepository
 from storage import (
     build_download_url,
     dataframe_to_csv_bytes,
+<<<<<<< claude/great-mcnulty-8b5c93
     download_object_bytes,
     fetch_json_artifact,
+=======
+>>>>>>> main
     upload_csv_artifacts,
-    upload_json_artifact,
 )
 
 logger = logging.getLogger(__name__)
@@ -335,17 +337,10 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         else:
             normalized_timings = {"job_elapsed": round(time.perf_counter() - job_started, 3)}
         if debug_data_prep is not None:
-            artifact_prefix = _build_artifact_prefix(request)
-            bucket, key = upload_json_artifact(
-                run_id=request.run_id,
-                prefix=artifact_prefix,
-                artifact_name=f"debug-data-prep-{job_id}",
-                payload={"debugDataPrep": _make_json_safe(debug_data_prep)},
-            )
             repo.store_debug_dump(
                 job_id,
                 request.run_id,
-                {"bucket": bucket, "key": key},
+                {"debugDataPrep": _make_json_safe(debug_data_prep)},
                 ttl_minutes=5,
             )
         repo.update_progress(
@@ -563,17 +558,12 @@ class JobService:
         doc = self.repo.get_debug_dump(job_id)
         if doc is None:
             return None
-        payload_meta = doc.get("payload", {}) or {}
-        bucket = payload_meta.get("bucket")
-        key = payload_meta.get("key")
-        if not bucket or not key:
-            return None
         return {
             "jobId": doc.get("jobId"),
             "runId": doc.get("runId"),
             "createdAt": doc.get("createdAt"),
             "expiresAt": doc.get("expiresAt"),
-            "payload": fetch_json_artifact(bucket, key),
+            "payload": doc.get("payload", {}),
         }
 
     @staticmethod
