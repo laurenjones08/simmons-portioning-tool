@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 
+from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 
 from repositories.bucket_usage_repository import BucketUsageRepository
@@ -40,4 +41,20 @@ class BucketUsageService:
 
     def delete(self, document_id: str) -> bool:
         return self.repository.delete(document_id)
+
+    def bulk_create(self, items: List[BucketUsageCreate], clear_dates: List[str]) -> Dict[str, Any]:
+        if clear_dates:
+            self.repository.delete_by_dates(clear_dates)
+        documents = []
+        for item in items:
+            doc = BucketUsage(**item.model_dump(by_alias=True)).model_dump(by_alias=True)
+            doc["_id"] = str(ObjectId())
+            documents.append(doc)
+        inserted = self.repository.bulk_create(documents)
+        return {
+            "total": len(items),
+            "successful": len(inserted),
+            "failed": len(items) - len(inserted),
+            "items": [BucketUsage(**doc) for doc in inserted],
+        }
 

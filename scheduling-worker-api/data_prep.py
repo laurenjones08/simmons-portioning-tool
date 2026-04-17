@@ -109,6 +109,15 @@ class SchedulingApiClient(BaseApiClient):
     def list_scheduling_outputs(self) -> List[dict]:
         return self._request_json("/scheduling-outputs/search", method="POST", payload={}) or []
 
+    def bulk_create_decisions(self, payload: dict) -> dict:
+        return self._request_json("/scheduling-decisions/bulk", method="POST", payload=payload) or {}
+
+    def bulk_create_outputs(self, payload: dict) -> dict:
+        return self._request_json("/scheduling-outputs/bulk", method="POST", payload=payload) or {}
+
+    def bulk_create_bucket_usage(self, payload: dict) -> dict:
+        return self._request_json("/bucket-usage/bulk", method="POST", payload=payload) or {}
+
 
 class GlobalConfigApiClient(BaseApiClient):
     def list_configs(self) -> List[dict]:

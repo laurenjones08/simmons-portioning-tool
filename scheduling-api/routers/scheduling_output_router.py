@@ -1,6 +1,7 @@
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from pymongo.database import Database
 
 from database import get_database
@@ -14,6 +15,11 @@ from scheduling_shared.models.scheduling_output import (
 from services.scheduling_output_service import SchedulingOutputService
 
 router = APIRouter()
+
+
+class BulkCreateOutputsRequest(BaseModel):
+    items: List[SchedulingOutputCreate]
+    clearDates: Optional[List[str]] = None
 
 
 def get_service(db: Database = Depends(get_database)) -> SchedulingOutputService:
@@ -62,6 +68,14 @@ async def update(document_id: str, payload: SchedulingOutputUpdate, service: Sch
     if document is None:
         raise HTTPException(status_code=404, detail=f"Scheduling output with id {document_id} not found")
     return document
+
+
+@router.post("/bulk", status_code=status.HTTP_200_OK)
+async def bulk_create(payload: BulkCreateOutputsRequest, service: SchedulingOutputService = Depends(get_service)) -> Dict[str, Any]:
+    try:
+        return service.bulk_create(payload.items, payload.clearDates or [])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error bulk creating scheduling outputs: {exc}")
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_200_OK)

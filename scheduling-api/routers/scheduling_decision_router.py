@@ -1,6 +1,7 @@
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from pymongo.database import Database
 
 from database import get_database
@@ -14,6 +15,11 @@ from scheduling_shared.models.scheduling_decision import (
 from services.scheduling_decision_service import SchedulingDecisionService
 
 router = APIRouter()
+
+
+class BulkCreateDecisionsRequest(BaseModel):
+    items: List[SchedulingDecisionCreate]
+    clearDates: Optional[List[str]] = None
 
 
 def get_service(db: Database = Depends(get_database)) -> SchedulingDecisionService:
@@ -62,6 +68,14 @@ async def update(document_id: str, payload: SchedulingDecisionUpdate, service: S
     if document is None:
         raise HTTPException(status_code=404, detail=f"Scheduling decision with id {document_id} not found")
     return document
+
+
+@router.post("/bulk", status_code=status.HTTP_200_OK)
+async def bulk_create(payload: BulkCreateDecisionsRequest, service: SchedulingDecisionService = Depends(get_service)) -> Dict[str, Any]:
+    try:
+        return service.bulk_create(payload.items, payload.clearDates or [])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error bulk creating scheduling decisions: {exc}")
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_200_OK)
