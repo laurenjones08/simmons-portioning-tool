@@ -23,7 +23,7 @@ def _get_service(db: Database = Depends(get_database)) -> JobService:
     summary="Submit a new scheduling job",
     description="Submits a background scheduling job for a single plant and explicit skuIds list, then stores result summaries.",
 )
-async def submit_job(payload: CreateJobRequest, service: JobService = Depends(_get_service)) -> JobStatusResponse:
+def submit_job(payload: CreateJobRequest, service: JobService = Depends(_get_service)) -> JobStatusResponse:
     try:
         return service.submit_job(payload)
     except ValueError as exc:
@@ -37,7 +37,7 @@ async def submit_job(payload: CreateJobRequest, service: JobService = Depends(_g
     response_model=List[JobStatusResponse],
     summary="List all scheduling jobs",
 )
-async def list_jobs(
+def list_jobs(
     status: Optional[str] = Query(default=None, description="Filter by job status"),
     service: JobService = Depends(_get_service),
 ) -> List[JobStatusResponse]:
@@ -49,7 +49,7 @@ async def list_jobs(
     response_model=JobStatusResponse,
     summary="Get scheduling job status",
 )
-async def get_job(job_id: str, service: JobService = Depends(_get_service)) -> JobStatusResponse:
+def get_job(job_id: str, service: JobService = Depends(_get_service)) -> JobStatusResponse:
     job = service.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -61,7 +61,7 @@ async def get_job(job_id: str, service: JobService = Depends(_get_service)) -> J
     response_model=JobStatusResponse,
     summary="Cancel a scheduling job",
 )
-async def cancel_job(job_id: str, service: JobService = Depends(_get_service)) -> JobStatusResponse:
+def cancel_job(job_id: str, service: JobService = Depends(_get_service)) -> JobStatusResponse:
     result = service.cancel_job(job_id)
     if result is None:
         raise HTTPException(
@@ -76,7 +76,7 @@ async def cancel_job(job_id: str, service: JobService = Depends(_get_service)) -
     response_model=List[ArtifactFile],
     summary="Get downloadable scheduling artifacts",
 )
-async def get_job_artifacts(job_id: str, service: JobService = Depends(_get_service)) -> List[ArtifactFile]:
+def get_job_artifacts(job_id: str, service: JobService = Depends(_get_service)) -> List[ArtifactFile]:
     artifacts = service.get_artifacts(job_id)
     if artifacts is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -87,7 +87,7 @@ async def get_job_artifacts(job_id: str, service: JobService = Depends(_get_serv
     "/{job_id}/results",
     summary="Get stored scheduling results payload",
 )
-async def get_job_results(job_id: str, service: JobService = Depends(_get_service)):
+def get_job_results(job_id: str, service: JobService = Depends(_get_service)):
     results = service.get_results(job_id)
     if results is None:
         raise HTTPException(status_code=404, detail=f"Results for job {job_id} not found")
@@ -98,7 +98,7 @@ async def get_job_results(job_id: str, service: JobService = Depends(_get_servic
     "/{job_id}/debug-data-prep",
     summary="Get short-lived dataprep debug dump",
 )
-async def get_job_debug_data_prep(job_id: str, service: JobService = Depends(_get_service)):
+def get_job_debug_data_prep(job_id: str, service: JobService = Depends(_get_service)):
     debug_dump = service.get_debug_dump(job_id)
     if debug_dump is None:
         raise HTTPException(status_code=404, detail=f"Debug dataprep dump for job {job_id} not found")

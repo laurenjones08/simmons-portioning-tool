@@ -59,17 +59,37 @@ function Invoke-JsonRequest {
     )
 
     $headers = @{ Accept = "application/json" }
-    if ($Method -eq "GET") {
-        if ($RequestTimeoutSec -le 0) {
-            return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec 0
-        }
-        return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec $RequestTimeoutSec
-    }
+    $maxGatewayRetries = 3
+    $gatewayRetryDelaySec = 2
 
-    if ($RequestTimeoutSec -le 0) {
-        return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec 0
+    for ($attempt = 1; $attempt -le $maxGatewayRetries; $attempt++) {
+        try {
+            if ($Method -eq "GET") {
+                if ($RequestTimeoutSec -le 0) {
+                    return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec 0
+                }
+                return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec $RequestTimeoutSec
+            }
+
+            if ($RequestTimeoutSec -le 0) {
+                return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec 0
+            }
+            return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec $RequestTimeoutSec
+        } catch {
+            $statusCode = $null
+            if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+            }
+
+            if ($statusCode -eq 504 -and $attempt -lt $maxGatewayRetries) {
+                Write-Info "Gateway timed out on $Method $Url (attempt $attempt/$maxGatewayRetries). Retrying in $gatewayRetryDelaySec seconds..."
+                Start-Sleep -Seconds $gatewayRetryDelaySec
+                continue
+            }
+
+            throw
+        }
     }
-    return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec $RequestTimeoutSec
 }
 
 function Save-DebugDataPrepDump {
