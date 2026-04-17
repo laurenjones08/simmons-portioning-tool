@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scheduling-worker-api"))
 from data_prep import (  # noqa: E402
     DataPrepSources,
     SchedulingWorkerDataPrep,
+    calculate_bucket_mean,
     extract_short_term_demand_records,
     load_short_term_demand_from_table,
 )
@@ -24,12 +25,6 @@ class StubPrep(SchedulingWorkerDataPrep):
                 assert criteria == {"plantName": "FSP"}
                 return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
 
-            def search_sku_demands(self, criteria=None):
-                assert criteria["demandType"] == "Short"
-                assert criteria["skuIds"] == ["SKU-1"]
-                assert criteria["dueDates"] == ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-10"]
-                return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
-
         class FakeConfigApi:
             def list_lines(self):
                 return [
@@ -39,20 +34,25 @@ class StubPrep(SchedulingWorkerDataPrep):
                         "lineType": "DSI888",
                         "plant": "FSP",
                         "hoursOfLaborAvailablePerShift": 7.5,
+                        "unitsAvailable": 2,
                         "lineThroughput": 9000.0,
                         "isActive": True,
                     }
                 ]
 
             def list_configs(self):
-                return [{"key": "scheduling.gamma_value", "value": 0.25}]
+                return [
+                    {"key": "scheduling.gamma_value", "value": 0.25},
+                    {"key": "enumeration.upgradeDistributionMu", "value": 100.0},
+                    {"key": "enumeration.upgradeDistributionSigma", "value": 1.0},
+                ]
 
         class FakeEnumerationApi:
             def list_mixes(self):
                 return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
 
             def list_buckets(self):
-                return [{"name": "bucket-1"}]
+                return [{"_id": "bucket-1", "minWeight": 95.0, "targetWeight": 100.0, "maxWeight": 105.0}]
 
             def list_mix_metrics(self, sku_trade_numbers=None):
                 return [
@@ -60,6 +60,7 @@ class StubPrep(SchedulingWorkerDataPrep):
                         "_id": "mix-1:bucket-1",
                         "mixId": "mix-1",
                         "bucketId": "bucket-1",
+                        "upgradePercentage": 50.0,
                         "value": 4.2,
                         "unitPlan": [
                             {
@@ -109,11 +110,158 @@ def test_prepare_builds_api_backed_inputs():
     assert inputs["line_throughput"]["line-1"] == 9000.0
     assert inputs["Y"][("SKU-1", "mix-1:bucket-1")] == 1.0
     assert inputs["V"]["mix-1:bucket-1"] == 4.2
-    assert inputs["R"]["mix-1:bucket-1"] == 11.0
+    assert round(inputs["R"]["mix-1:bucket-1"], 6) == round(11.0 * 60.0 * (100.0 / 453.6) * 0.5 * 2.0, 6)
     assert inputs["monthly_contract"][("SKU-1", pd.Period("2026-01", freq="M"))] == 500.0
     assert inputs["big_allowed"]["SKU-1"] == 0
     assert inputs["small_allowed"]["SKU-1"] == 1
     assert inputs["bird_type"]["SKU-1"] == "small"
+
+
+def test_prepare_removes_zero_monthly_contract_skus_before_metric_selection():
+    class ContractPrunePrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    assert criteria == {"plantName": "FSP"}
+                    return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-1",
+                            "friendlyName": "Line 1",
+                            "lineType": "DSI888",
+                            "plant": "FSP",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "unitsAvailable": 2,
+                            "lineThroughput": 9000.0,
+                            "isActive": True,
+                        }
+                    ]
+
+                def list_configs(self):
+                    return [
+                        {"key": "scheduling.gamma_value", "value": 0.25},
+                        {"key": "enumeration.upgradeDistributionMu", "value": 100.0},
+                        {"key": "enumeration.upgradeDistributionSigma", "value": 1.0},
+                    ]
+
+            class FakeEnumerationApi:
+                def list_mixes(self):
+                    return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
+
+                def list_buckets(self):
+                    return [{"_id": "bucket-1", "minWeight": 95.0, "targetWeight": 100.0, "maxWeight": 105.0}]
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    assert sku_trade_numbers == ["SKU-1"]
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "upgradePercentage": 50.0,
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        },
+                        {
+                            "_id": "mix-1:bucket-2",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "upgradePercentage": 50.0,
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-2", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-2"],
+                        },
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {
+                ("SKU-1", months[0]): 500.0,
+                ("SKU-2", months[0]): 0.0,
+            }
+
+    prep = ContractPrunePrep(use_demo_fallbacks=False)
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1", "SKU-2"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert inputs["P"] == ["SKU-1"]
+    assert inputs["K"] == ["mix-1:bucket-1"]
+    assert list(inputs["monthly_contract"].keys()) == [("SKU-1", pd.Period("2026-01", freq="M"))]
+    assert ("SKU-2", "mix-1:bucket-2") not in inputs["Y"]
+
+
+def test_build_rate_map_uses_bucket_mean_upgrade_ratio_and_line_units():
+    class RatePrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            return None
+
+    prep = RatePrep(use_demo_fallbacks=False)
+    mixes = [{"_id": "mix-1", "beltSpeed": 11.0}]
+    metrics = [{"_id": "mix-1:bucket-1", "mixId": "mix-1", "bucketId": "bucket-1", "upgradePercentage": 50.0}]
+    buckets = [{"_id": "bucket-1", "minWeight": 95.0, "targetWeight": 100.0, "maxWeight": 105.0}]
+    lines = [{"lineId": "line-1", "unitsAvailable": 2}]
+    configs = [
+        {"key": "enumeration.upgradeDistributionMu", "value": 100.0},
+        {"key": "enumeration.upgradeDistributionSigma", "value": 1.0},
+    ]
+    line_of_k = {"mix-1:bucket-1": "line-1"}
+
+    rates = prep._build_rate_map(mixes, metrics, buckets, lines, configs, line_of_k)
+
+    expected_bucket_mean = calculate_bucket_mean(95.0, 105.0, 100.0, 1.0)
+    assert rates == {
+        "mix-1:bucket-1": 11.0 * 60.0 * (expected_bucket_mean / 453.6) * 0.5 * 2.0,
+    }
+
+
+def test_filter_runnable_metrics_uses_metric_ids_not_mix_ids():
+    class FilterPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            return None
+
+    prep = FilterPrep(use_demo_fallbacks=False)
+    metrics = [
+        {"_id": "mix-1:bucket-1", "mixId": "mix-1", "bucketId": "bucket-1"},
+        {"_id": "mix-1:bucket-2", "mixId": "mix-1", "bucketId": "bucket-2"},
+    ]
+
+    selected = prep._filter_runnable_metrics(metrics, {"mix-1:bucket-1": "line-1"})
+
+    assert [metric["_id"] for metric in selected] == ["mix-1:bucket-1"]
+
+
+def test_filter_metrics_with_valid_target_buckets_drops_invalid_bucket_rows():
+    class FilterPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            return None
+
+    prep = FilterPrep(use_demo_fallbacks=False)
+    metrics = [
+        {"_id": "mix-1:bucket-good", "mixId": "mix-1", "bucketId": "bucket-good"},
+        {"_id": "mix-1:bucket-bad", "mixId": "mix-1", "bucketId": "bucket-bad"},
+    ]
+    buckets = [
+        {"_id": "bucket-good", "targetWeight": 100.0},
+        {"_id": "bucket-bad"},
+    ]
+
+    selected = prep._filter_metrics_with_valid_target_buckets(metrics, buckets)
+
+    assert [metric["_id"] for metric in selected] == ["mix-1:bucket-good"]
 
 
 def test_prepare_assigns_line_by_mix_mfg_type(monkeypatch):
@@ -130,9 +278,6 @@ def test_prepare_assigns_line_by_mix_mfg_type(monkeypatch):
             class FakeSchedulingApi:
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
-
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
 
             class FakeConfigApi:
                 def list_lines(self):
@@ -215,9 +360,6 @@ def test_prepare_uses_cut_strategy_line_type_when_mix_mfg_type_is_generic_dsi(mo
             class FakeSchedulingApi:
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
-
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
 
             class FakeConfigApi:
                 def list_lines(self):
@@ -317,9 +459,6 @@ def test_prepare_prefers_line_permitted_cut_strategy_ids(monkeypatch):
             class FakeSchedulingApi:
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
-
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
 
             class FakeConfigApi:
                 def list_lines(self):
@@ -455,9 +594,6 @@ def test_prepare_combines_bird_requirements_across_mixes():
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
 
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
-
             class FakeConfigApi:
                 def list_lines(self):
                     return [{"lineId": "line-1", "friendlyName": "Line 1", "lineType": "DSI888", "plant": "FSP", "hoursOfLaborAvailablePerShift": 7.5, "lineThroughput": 9000.0, "isActive": True}]
@@ -524,9 +660,6 @@ def test_prepare_filters_out_metrics_with_no_matching_active_line():
             class FakeSchedulingApi:
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
-
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
 
             class FakeConfigApi:
                 def list_lines(self):
@@ -610,9 +743,6 @@ def test_prepare_filters_out_metrics_with_missing_mix_documents():
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
 
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
-
             class FakeConfigApi:
                 def list_lines(self):
                     return [
@@ -692,9 +822,6 @@ def test_prepare_maps_mix_level_line_assignments_back_to_metric_ids():
             class FakeSchedulingApi:
                 def search_available_wip(self, criteria=None):
                     return [{"bucketId": "bucket-1", "plantName": "VBS", "availableLbs": 999.0}]
-
-                def search_sku_demands(self, criteria=None):
-                    return [{"skuId": "SKU-1", "demandValue": 123.0, "demandType": "Short", "dueDate": "2026-01-05"}]
 
             class FakeConfigApi:
                 def list_lines(self):

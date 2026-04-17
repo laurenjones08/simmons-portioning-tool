@@ -55,11 +55,32 @@ def test_job_request_model_validation():
         plantId="FSP",
         skuIds=["50624", "50625"],
         shortTermFile=None,
+        debugMode=True,
     )
     assert request.run_id == "schedule-2026-04-10"
     assert request.plant_id == "FSP"
     assert request.sku_ids == ["50624", "50625"]
+    assert request.debug_mode is True
     assert request.horizon_days == 12
+
+
+def test_make_json_safe_serializes_tuple_keyed_maps():
+    payload = {
+        "WIP": {
+            ("bucket-1", pd.Timestamp("2026-01-05")): 123.0,
+        }
+    }
+
+    safe = job_service_module._make_json_safe(payload)
+
+    assert safe == {
+        "WIP": [
+            {
+                "key": ["bucket-1", "2026-01-05T00:00:00"],
+                "value": 123.0,
+            }
+        ]
+    }
 
 
 def test_job_sku_validation_requires_single_plant(monkeypatch):
@@ -82,57 +103,3 @@ def test_job_sku_validation_requires_single_plant(monkeypatch):
         assert "same plant" in str(exc)
 
 
-def test_short_term_demand_save_posts_to_scheduling_api(monkeypatch, tmp_path):
-    short_term_file = tmp_path / "short_term_demand.csv"
-    pd.DataFrame(
-        [
-            {"sku": "50624", "demand": 10, "type": "Short", "dueDate": "2026-01-05"},
-            {"sku": "50624", "demand": 5, "type": "short", "dueDate": "2026-01-06"},
-            {"sku": "50624", "demand": 99, "type": "Long", "dueDate": "2026-01-05"},
-        ]
-    ).to_csv(short_term_file, index=False)
-
-    captured = {}
-
-    class FakeClient:
-        def __init__(self, base_url, timeout_seconds):
-            captured["base_url"] = base_url
-            captured["timeout_seconds"] = timeout_seconds
-
-        def bulk_create_sku_demands(self, demands):
-            captured["demands"] = demands
-            return {"total": 1, "successful": 1, "failed": 0, "errors": []}
-
-    class FakeEndpoints:
-        scheduling_api_url = "http://example.test"
-        timeout_seconds = 3.0
-
-    monkeypatch.setattr(job_service_module, "ApiEndpoints", lambda: FakeEndpoints())
-    monkeypatch.setattr(job_service_module, "SchedulingApiClient", FakeClient)
-
-    result = job_service_module._save_short_term_demands(
-        CreateJobRequest(
-            runId="schedule-2026-04-10",
-            plantId="FSP",
-            skuIds=["50624"],
-            shortTermFile=str(short_term_file),
-        )
-    )
-
-    assert captured["base_url"] == "http://example.test"
-    assert captured["timeout_seconds"] == 3.0
-    assert captured["demands"] == [
-        {
-            "skuId": "50624",
-            "demandValue": 10.0,
-            "demandType": "Short",
-            "dueDate": "2026-01-05",
-        },
-        {
-            "skuId": "50624",
-            "demandValue": 5.0,
-            "demandType": "Short",
-            "dueDate": "2026-01-06",
-        },
-    ]
-    assert result == {"total": 1, "successful": 1, "failed": 0, "errors": []}

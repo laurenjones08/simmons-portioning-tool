@@ -6,7 +6,8 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
@@ -15,10 +16,15 @@ from bson import ObjectId
 from pymongo.database import Database
 
 from config import get_settings
-from data_prep import ApiEndpoints, SchedulingApiClient, extract_short_term_demand_records
 from models.job import ArtifactFile, CreateJobRequest, JobStatus, JobStatusResponse
 from repositories.job_repository import JobRepository
-from storage import build_download_url, dataframe_to_csv_bytes, upload_csv_artifacts
+from storage import (
+    build_download_url,
+    dataframe_to_csv_bytes,
+    fetch_json_artifact,
+    upload_csv_artifacts,
+    upload_json_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +52,42 @@ def _serialize_dataframe(df) -> List[Dict[str, Any]]:
         return json.loads(df.to_json(orient="records", date_format="iso"))
     except Exception:
         return []
+
+
+def _make_json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if is_dataclass(value):
+        return _make_json_safe(asdict(value))
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    if isinstance(value, dict):
+        if all(isinstance(key, str) for key in value.keys()):
+            return {key: _make_json_safe(item) for key, item in value.items()}
+        return [
+            {"key": _make_json_safe(key), "value": _make_json_safe(item)}
+            for key, item in value.items()
+        ]
+
+    if isinstance(value, (list, tuple, set)):
+        return [_make_json_safe(item) for item in value]
+
+    if hasattr(value, "isoformat") and callable(getattr(value, "isoformat")):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return _make_json_safe(value.item())
+        except Exception:
+            pass
+
+    return str(value)
 
 
 def _artifact_file_name(artifact_name: str) -> str:
@@ -114,46 +156,6 @@ def _validate_job_skus(plant_id: str, sku_ids: List[str]) -> List[str]:
     return normalized_ids
 
 
-def _save_short_term_demands(request: CreateJobRequest) -> Optional[Dict[str, Any]]:
-    if not request.short_term_file:
-        return None
-
-    path = Path(request.short_term_file)
-    if not path.exists():
-        raise ValueError(f"Short-term demand file not found: {request.short_term_file}")
-
-    records = extract_short_term_demand_records(path, request.sku_ids)
-    if not records:
-        logger.info("No short-term demand rows matched the uploaded file for job %s", request.run_id)
-        return {"total": 0, "successful": 0, "failed": 0, "errors": []}
-
-    endpoints = ApiEndpoints()
-    client = SchedulingApiClient(endpoints.scheduling_api_url, endpoints.timeout_seconds)
-    response = client.bulk_create_sku_demands(records)
-
-    total = int(response.get("total", len(records)))
-    successful = int(response.get("successful", 0))
-    failed = int(response.get("failed", max(0, total - successful)))
-    errors = response.get("errors", []) or []
-
-    if failed or errors:
-        logger.warning(
-            "Short-term demand save for job %s completed with issues: successful=%s failed=%s",
-            request.run_id,
-            successful,
-            failed,
-        )
-    else:
-        logger.info("Saved %s short-term demand rows for job %s", successful, request.run_id)
-
-    return {
-        "total": total,
-        "successful": successful,
-        "failed": failed,
-        "errors": errors,
-    }
-
-
 def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> None:
     global _active_job_id
     repo = JobRepository(db)
@@ -161,12 +163,27 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
 
     def progress_callback(stage: str, message: Optional[str] = None, details: Optional[Dict[str, Any]] = None) -> None:
         detail_payload = dict(details or {})
+        debug_data_prep = detail_payload.pop("debugDataPrep", None)
         timings = detail_payload.pop("timings", None)
         if timings is not None:
             normalized_timings = {str(key): float(value) for key, value in dict(timings).items()}
             normalized_timings["job_elapsed"] = round(time.perf_counter() - job_started, 3)
         else:
             normalized_timings = {"job_elapsed": round(time.perf_counter() - job_started, 3)}
+        if debug_data_prep is not None:
+            artifact_prefix = _build_artifact_prefix(request)
+            bucket, key = upload_json_artifact(
+                run_id=request.run_id,
+                prefix=artifact_prefix,
+                artifact_name=f"debug-data-prep-{job_id}",
+                payload={"debugDataPrep": _make_json_safe(debug_data_prep)},
+            )
+            repo.store_debug_dump(
+                job_id,
+                request.run_id,
+                {"bucket": bucket, "key": key},
+                ttl_minutes=5,
+            )
         repo.update_progress(
             job_id,
             current_stage=stage,
@@ -177,8 +194,6 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
 
     try:
         repo.mark_running(job_id)
-        progress_callback("short_term_demand", "Saving short-term demand file rows, if provided.")
-        short_term_demand_result = _save_short_term_demands(request)
         _ensure_scheduling_path()
         from run_model import run_for_job  # type: ignore
 
@@ -232,8 +247,7 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         inputs_payload["shortTermFile"] = request.short_term_file
         inputs_payload["plantId"] = request.plant_id
         inputs_payload["skuIds"] = request.sku_ids
-        if short_term_demand_result is not None:
-            inputs_payload["savedShortTermDemand"] = short_term_demand_result
+        inputs_payload["debugMode"] = request.debug_mode
 
         artifact_payload: Dict[str, Any] = {}
         artifact_payload["bucket"] = artifact_bucket
@@ -306,6 +320,7 @@ class JobService:
                 "saveCsv": request.save_csv,
                 "outputDir": request.output_dir,
                 "tee": request.tee,
+                "debugMode": request.debug_mode,
                 "planStartDate": request.plan_start_date,
                 "horizonDays": request.horizon_days,
                 "currentStage": "pending",
@@ -360,6 +375,34 @@ class JobService:
             return None
         return self._doc_to_response(doc).artifact_files
 
+    def get_results(self, job_id: str) -> Optional[Dict[str, Any]]:
+        doc = self.repo.get_results(job_id)
+        if doc is None:
+            return None
+        return {
+            "jobId": doc.get("jobId"),
+            "runId": doc.get("runId"),
+            "createdAt": doc.get("createdAt"),
+            "outputs": doc.get("outputs", {}),
+        }
+
+    def get_debug_dump(self, job_id: str) -> Optional[Dict[str, Any]]:
+        doc = self.repo.get_debug_dump(job_id)
+        if doc is None:
+            return None
+        payload_meta = doc.get("payload", {}) or {}
+        bucket = payload_meta.get("bucket")
+        key = payload_meta.get("key")
+        if not bucket or not key:
+            return None
+        return {
+            "jobId": doc.get("jobId"),
+            "runId": doc.get("runId"),
+            "createdAt": doc.get("createdAt"),
+            "expiresAt": doc.get("expiresAt"),
+            "payload": fetch_json_artifact(bucket, key),
+        }
+
     @staticmethod
     def _doc_to_response(doc: Dict[str, Any]) -> JobStatusResponse:
         now = _now()
@@ -383,11 +426,18 @@ class JobService:
             saveCsv=doc.get("saveCsv", False),
             outputDir=doc.get("outputDir", "outputs"),
             tee=doc.get("tee", False),
+            debugMode=doc.get("debugMode", False),
             planStartDate=doc.get("planStartDate", "2026-01-05"),
             horizonDays=doc.get("horizonDays", 12),
+            currentStage=doc.get("currentStage"),
+            stageMessage=doc.get("stageMessage"),
+            stageDetails=doc.get("stageDetails", {}),
+            stageUpdatedAt=doc.get("stageUpdatedAt"),
+            timings=doc.get("timings", {}),
             plantId=doc.get("plantId"),
             skuIds=doc.get("skuIds", []),
             errorMessage=doc.get("errorMessage"),
+            errorTraceback=doc.get("errorTraceback"),
             resultsCollection=doc.get("resultsCollection", "scheduling_results"),
             artifactBucket=doc.get("artifactBucket"),
             artifactPrefix=doc.get("artifactPrefix"),
