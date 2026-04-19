@@ -48,6 +48,7 @@ def run_pipeline(
         line_throughput=inputs["line_throughput"],
         big_allowed=inputs["big_allowed"],
         small_allowed=inputs["small_allowed"],
+        upgrade_pct=inputs["upgrade_pct"],
         gamma=inputs["gamma"],
     )
     # 3. Solve

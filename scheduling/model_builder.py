@@ -11,8 +11,10 @@ def build_model(
     line_throughput,
     big_allowed,
     small_allowed,
+    upgrade_pct,
     gamma=1.0
 ):
+
     """
     P_set              : iterable of SKUs p
     T_set              : iterable of production dates t
@@ -67,6 +69,8 @@ def build_model(
 
     m.big_allowed = Param(m.P, initialize=big_allowed, within=Binary)
     m.small_allowed = Param(m.P, initialize=small_allowed, within=Binary)
+
+    m.upgrade_pct = Param(m.K, initialize=upgrade_pct, within=NonNegativeReals)
 
     # month_of_day is easier as a plain Python dict for filtering
     month_of_day_dict = dict(month_of_day)
