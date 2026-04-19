@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scheduling-worker-api"))
 from data_prep import (  # noqa: E402
     DataPrepSources,
     SchedulingWorkerDataPrep,
+    _production_days_in_month,
     calculate_bucket_mean,
     extract_short_term_demand_records,
     load_short_term_demand_from_table,
@@ -208,6 +209,30 @@ def test_prepare_removes_zero_monthly_contract_skus_before_metric_selection():
     assert inputs["K"] == ["mix-1:bucket-1"]
     assert list(inputs["monthly_contract"].keys()) == [("SKU-1", pd.Period("2026-01", freq="M"))]
     assert ("SKU-2", "mix-1:bucket-2") not in inputs["Y"]
+
+
+def test_prepare_prorates_monthly_contracts_for_partial_horizon_months():
+    class PartialMonthPrep(StubPrep):
+        def _build_monthly_contract(self, sku_ids, months):
+            return {(sku_ids[0], month): 2600.0 for month in months}
+
+    prep = PartialMonthPrep(use_demo_fallbacks=False)
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-04-19",
+            "horizonDays": 12,
+        }
+    )
+
+    april = pd.Period("2026-04", freq="M")
+    may = pd.Period("2026-05", freq="M")
+    april_ratio = 10 / len(_production_days_in_month(april))
+    may_ratio = 2 / len(_production_days_in_month(may))
+
+    assert inputs["monthly_contract"][("SKU-1", april)] == 2600.0 * april_ratio
+    assert inputs["monthly_contract"][("SKU-1", may)] == 2600.0 * may_ratio
 
 
 def test_build_rate_map_uses_bucket_mean_upgrade_ratio_and_line_units():

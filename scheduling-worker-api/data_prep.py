@@ -477,6 +477,12 @@ def _date_strings(dates: Sequence[pd.Timestamp]) -> List[str]:
     return [pd.Timestamp(date).strftime("%Y-%m-%d") for date in dates]
 
 
+def _production_days_in_month(month: pd.Period) -> List[pd.Timestamp]:
+    start = month.to_timestamp(how="start")
+    end = month.to_timestamp(how="end").normalize()
+    return [day.normalize() for day in pd.date_range(start=start, end=end, freq="D") if day.weekday() < 6]
+
+
 def _metric_id(metric: Dict[str, Any]) -> str:
     return _clean_str(metric.get("_id") or metric.get("metricId") or f"{metric.get('mixId')}:{metric.get('bucketId')}")
 
@@ -1017,6 +1023,34 @@ class SchedulingWorkerDataPrep:
 
         return kept_skus, filtered_contract, removed_skus
 
+    def _prorate_monthly_contract_to_horizon(
+        self,
+        monthly_contract: Dict[tuple[str, pd.Period], float],
+        production_dates: Sequence[pd.Timestamp],
+    ) -> Dict[tuple[str, pd.Period], float]:
+        dates_by_month: Dict[pd.Period, List[pd.Timestamp]] = {}
+        for day in production_dates:
+            month = day.to_period("M")
+            dates_by_month.setdefault(month, []).append(day.normalize())
+
+        prorated: Dict[tuple[str, pd.Period], float] = {}
+        for (sku_id, month), demand in monthly_contract.items():
+            demand_value = float(demand)
+            if demand_value <= 0:
+                continue
+
+            modeled_days = len(dates_by_month.get(month, []))
+            if modeled_days <= 0:
+                continue
+
+            total_month_days = len(_production_days_in_month(month))
+            if total_month_days <= 0:
+                continue
+
+            prorated[(sku_id, month)] = demand_value * (modeled_days / total_month_days)
+
+        return prorated
+
     def _build_bucket_of_k(self, metrics: Sequence[dict]) -> Dict[str, str]:
         mapping: Dict[str, str] = {}
         for metric in metrics:
@@ -1318,6 +1352,7 @@ class SchedulingWorkerDataPrep:
         month_of_day = {d: d.to_period("M") for d in T}
 
         monthly_contract = self._build_monthly_contract(sku_ids, M)
+        monthly_contract = self._prorate_monthly_contract_to_horizon(monthly_contract, T)
         sku_ids, monthly_contract, removed_contract_skus = self._filter_skus_with_positive_monthly_contract(
             sku_ids,
             M,

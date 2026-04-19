@@ -6,7 +6,7 @@ param(
     [string[]]$SkuIds = @(),
     [string]$RunId = "",
     [string]$OutputDir = "outputs",
-    [int]$HorizonDays = 12,
+    [int]$HorizonDays = 15,
     [int]$RandomSkuCount = 15,
     [int]$RequestTimeoutSec = 0,
     [string]$PlanStartDate = (Get-Date).ToString("yyyy-MM-dd"),
