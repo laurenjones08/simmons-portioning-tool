@@ -76,7 +76,15 @@ def build_week1_demand(P, week1_dates, D_short):
     return D_week1
 
 
-def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon_days=12):
+def get_model_inputs(
+    job=None,
+    short_term_file=None,
+    plan_start_date="2026-01-05",
+    horizon_days=12,
+    plant_id=None,
+    sku_ids=None,
+    use_demo_fallbacks=False,
+):
     """
     plan_start_date:
         First production date in the planning horizon.
@@ -350,6 +358,18 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
     # --- Objective weights ---
     gamma = 0.1
 
+    upgrade_pct = {
+        "P1_DSI888": 0.08,
+        "P1_DB20": 0.07,
+        "P2_DSI888": 0.10,
+        "P2_DSI884": 0.09,
+        "P3_DSI884": 0.12,
+        "P3_DB20": 0.11,
+        "P4_DB20": 0.15,
+        "P5_DSI888": 0.05,
+        "pack_DSI884": 0.06,
+    }
+
     return {
         "P": P,
         "T": T,
@@ -376,4 +396,5 @@ def get_model_inputs(short_term_file=None, plan_start_date="2026-01-05", horizon
         "big_allowed": big_allowed,
         "small_allowed": small_allowed,
         "bird_type": bird_type,
+        "upgrade_pct": upgrade_pct,
     }
