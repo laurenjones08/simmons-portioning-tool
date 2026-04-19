@@ -34,7 +34,8 @@ def extract_decision_assignments(model, bucket_of_k, line_of_k):
                     "line": format_line_name(line_of_k[str(k)] if str(k) in line_of_k else line_of_k[k]),
                     "date": format_date(t),
                     "assigned_lbs": round(float(val), 3),
-                    "upgrade_pct": round(float(value(model.upgrade_pct[k])), 4)
+                    "upgrade_pct": round(float(value(model.upgrade_pct[k])), 4),
+                    "upgrade_lbs": round(float(val) * float(value(model.upgrade_pct[k])), 3)
                 })
 
 
@@ -44,18 +45,26 @@ def extract_daily_upgrade_summary(model):
     rows = []
 
     for t in model.T:
-        daily_upgrade_pcts = []
+        total_lbs = 0.0
+        weighted_upgrade = 0.0
+        num_batches = 0
 
         for k in model.K:
             val = value(model.x[k, t])
             if val is not None and val > 1e-6:
-                daily_upgrade_pcts.append(float(value(model.upgrade_pct[k])))
+                lbs = float(val)
+                upg = float(value(model.upgrade_pct[k]))
 
-        avg_upgrade_pct = sum(daily_upgrade_pcts) / len(daily_upgrade_pcts) if daily_upgrade_pcts else 0.0
+                total_lbs += lbs
+                weighted_upgrade += lbs * upg
+                num_batches += 1
+
+        avg_upgrade_pct = weighted_upgrade / total_lbs if total_lbs > 0 else 0.0
 
         rows.append({
             "date": format_date(t),
-            "num_batches": len(daily_upgrade_pcts),
+            "num_batches": num_batches,
+            "total_assigned_lbs": round(total_lbs, 3),
             "avg_upgrade_pct": round(avg_upgrade_pct, 4)
         })
 
