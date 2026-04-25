@@ -66,6 +66,35 @@ def test_mix_search_parses_legacy_dsi_documents():
     assert result[0].mfg_type.value == "DSI"
 
 
+def test_mix_search_normalizes_legacy_combined_bird_size():
+    mix_service, _, db = build_services()
+
+    db["mixes"].insert_one(
+        {
+            "_id": "legacy-mix-sbbb",
+            "skus": {"123": "D", "456": "R"},
+            "skuKeys": ["123", "456"],
+            "includesFDS": True,
+            "includesRTL": False,
+            "includesNug": False,
+            "nuggetTargetWeight": None,
+            "numFillets": 2,
+            "filletWeight": 24.0,
+            "mfgType": "DSI",
+            "reqPlant": "FSP",
+            "reqBirdSize": "SB/BB",
+            "cutStrategyID": "strategy-1",
+            "beltSpeed": 1.2,
+            "skuSetKey": "123|456",
+        }
+    )
+
+    result = mix_service.search_mixes(MixSearchCriteria())
+
+    assert [mix.mix_id for mix in result] == ["legacy-mix-sbbb"]
+    assert result[0].bird_size.value == "ALL"
+
+
 def test_mix_search_normalizes_objectid_fields():
     mix_service, _, db = build_services()
     cut_strategy_id = ObjectId()

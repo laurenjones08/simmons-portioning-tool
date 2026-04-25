@@ -6,11 +6,16 @@ param(
     [string[]]$SkuIds = @(),
     [string]$RunId = "",
     [string]$OutputDir = "outputs",
-    [int]$HorizonDays = 15,
-    [int]$RandomSkuCount = 15,
+    [int]$HorizonDays = 45,
+    [int]$RandomSkuCount = 20,
     [int]$RequestTimeoutSec = 0,
+    [int]$PollIntervalSec = 3,
+    [int]$PollRequestTimeoutSec = 15,
+    [int]$SolverPollIntervalSec = 20,
+    [int]$MaxConsecutivePollFailures = 20,
+    [double]$MaxTrimPercentage = 25.0,
     [string]$PlanStartDate = (Get-Date).ToString("yyyy-MM-dd"),
-    [switch]$SaveCsv,
+    [bool]$SaveCsv = $true,
     [switch]$Tee,
     [switch]$DebugMode,
     [string]$ShortTermFile = ""
@@ -56,26 +61,28 @@ function Invoke-JsonRequest {
     param(
         [Parameter(Mandatory = $true)][string]$Method,
         [Parameter(Mandatory = $true)][string]$Url,
-        [string]$Body = ""
+        [string]$Body = "",
+        [Nullable[int]]$TimeoutSecOverride = $null
     )
 
     $headers = @{ Accept = "application/json" }
     $maxGatewayRetries = 3
     $gatewayRetryDelaySec = 2
+    $effectiveTimeoutSec = if ($TimeoutSecOverride -ne $null) { [int]$TimeoutSecOverride } else { $RequestTimeoutSec }
 
     for ($attempt = 1; $attempt -le $maxGatewayRetries; $attempt++) {
         try {
             if ($Method -eq "GET") {
-                if ($RequestTimeoutSec -le 0) {
+                if ($effectiveTimeoutSec -le 0) {
                     return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec 0
                 }
-                return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec $RequestTimeoutSec
+                return Invoke-RestMethod -Method Get -Uri $Url -Headers $headers -TimeoutSec $effectiveTimeoutSec
             }
 
-            if ($RequestTimeoutSec -le 0) {
+            if ($effectiveTimeoutSec -le 0) {
                 return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec 0
             }
-            return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec $RequestTimeoutSec
+            return Invoke-RestMethod -Method $Method -Uri $Url -Headers $headers -ContentType "application/json" -Body $Body -TimeoutSec $effectiveTimeoutSec
         } catch {
             $statusCode = $null
             if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
@@ -130,9 +137,8 @@ function Save-JobArtifacts {
     foreach ($artifact in @($artifacts)) {
         $artifactName = [string]$artifact.artifactName
         $fileName = [string]$artifact.fileName
-        $downloadUrl = [string]$artifact.downloadUrl
-        if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
-            Write-Info "Skipping artifact $artifactName because no downloadUrl was returned"
+        if ([string]::IsNullOrWhiteSpace($artifactName)) {
+            Write-Info "Skipping an artifact entry because no artifactName was returned"
             continue
         }
 
@@ -141,8 +147,39 @@ function Save-JobArtifacts {
         }
 
         $artifactPath = Join-Path $script:ResolvedOutputDir "$RunLabel-$fileName"
+        $escapedArtifactName = [System.Uri]::EscapeDataString($artifactName)
+        $downloadUrl = "$ApiBaseUrl/jobs/$JobId/artifacts/$escapedArtifactName"
         Invoke-WebRequest -Method Get -Uri $downloadUrl -OutFile $artifactPath
         Write-Info "Saved CSV artifact to $artifactPath"
+    }
+}
+
+function Try-GetJobStatus {
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiBaseUrl,
+        [Parameter(Mandatory = $true)][string]$JobId
+    )
+
+    try {
+        return Invoke-JsonRequest -Method "GET" -Url "$ApiBaseUrl/jobs/$JobId" -TimeoutSecOverride $PollRequestTimeoutSec
+    } catch {
+        $statusCode = $null
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+        }
+
+        $message = $_.Exception.Message
+        if ([string]::IsNullOrWhiteSpace($message)) {
+            $message = [string]$_
+        }
+
+        Write-Info "Status poll failed for job $JobId ($message)."
+        if ($statusCode -ne $null) {
+            Write-Info "Last poll returned HTTP $statusCode; treating it as transient and retrying."
+        } else {
+            Write-Info "Status endpoint did not respond within $PollRequestTimeoutSec seconds; retrying."
+        }
+        return $null
     }
 }
 
@@ -302,12 +339,13 @@ $payload = [ordered]@{
     plantId = $PlantId
     skuIds = @($SkuIds)
     shortTermFile = $resolvedShortTermFile
-    saveCsv = [bool]$SaveCsv.IsPresent
+    saveCsv = [bool]$SaveCsv
     outputDir = $OutputDir
     tee = [bool]$Tee.IsPresent
     debugMode = [bool]$DebugMode.IsPresent
     planStartDate = $PlanStartDate
     horizonDays = $HorizonDays
+    maxTrimPercentage = $MaxTrimPercentage
 }
 
 $submitUrl = "$BaseUrl/jobs"
@@ -326,10 +364,28 @@ if ([string]::IsNullOrWhiteSpace($jobId)) {
 
 Write-Info "Polling job status for jobId $jobId"
 $terminalStates = @("completed", "failed", "cancelled")
+$consecutivePollFailures = 0
+$nextPollDelaySec = $PollIntervalSec
 do {
-    Start-Sleep -Seconds 3
-    $status = Invoke-JsonRequest -Method "GET" -Url "$BaseUrl/jobs/$jobId"
+    Start-Sleep -Seconds $nextPollDelaySec
+    $status = Try-GetJobStatus -ApiBaseUrl $BaseUrl -JobId $jobId
+    if ($null -eq $status) {
+        $consecutivePollFailures += 1
+        Write-Host ("[{0}] polling | status endpoint unavailable | consecutiveFailures={1}" -f (Get-Date).ToString("HH:mm:ss"), $consecutivePollFailures)
+        $nextPollDelaySec = $SolverPollIntervalSec
+        if ($consecutivePollFailures -ge $MaxConsecutivePollFailures) {
+            throw "Unable to read job status for $jobId after $MaxConsecutivePollFailures consecutive polling failures."
+        }
+        continue
+    }
+    $consecutivePollFailures = 0
     $state = [string]$status.status
+    $currentStage = [string]$status.currentStage
+    if ($currentStage -eq "solver") {
+        $nextPollDelaySec = $SolverPollIntervalSec
+    } else {
+        $nextPollDelaySec = $PollIntervalSec
+    }
     Write-Host ("[{0}] {1}" -f (Get-Date).ToString("HH:mm:ss"), (Format-JobProgress -Job $status))
 } while ($terminalStates -notcontains $state)
 

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     object_store_region: str = Field(default="us-east-1", alias="OBJECT_STORE_REGION")
     object_store_secure: bool = Field(default=False, alias="OBJECT_STORE_SECURE")
     object_store_public_base_url: str = Field(default="http://localhost:9000", alias="OBJECT_STORE_PUBLIC_BASE_URL")
+    scheduling_solver: str = Field(default="gurobi", alias="SCHEDULING_SOLVER")
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

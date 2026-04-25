@@ -12,11 +12,12 @@ def run_for_job(
     sku_ids=None,
     progress_callback=None,
 ):
-    """Run the scheduling pipeline for a job request."""
+    """Run the scheduling pipeline for a worker job without local CSV writes."""
     return run_pipeline(
         job=job,
         short_term_file=short_term_file,
-        save_csv=True,
+        # The worker uploads CSV artifacts to MinIO directly from in-memory DataFrames.
+        save_csv=False,
         output_dir=output_dir,
         tee=tee,
         plan_start_date=plan_start_date,
@@ -58,7 +59,7 @@ def main():
     print("bucket_usage_by_date:")
     print(results["outputs"]["bucket_usage_by_date"].head(20), "\n")
 
-    print("All outputs written to: outputs")
+    print("Worker jobs upload CSV artifacts to MinIO instead of writing local output files.")
 
 
 if __name__ == "__main__":

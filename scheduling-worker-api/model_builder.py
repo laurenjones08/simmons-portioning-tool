@@ -13,8 +13,7 @@ def build_model(
     month_of_day,
     week1_dates,
     line_throughput,
-    big_allowed,
-    small_allowed,
+    upgrade_pct,
     gamma=1.0
 ):
     """
@@ -37,7 +36,7 @@ def build_model(
     month_of_day[t]    : month associated with date t
     week1_dates        : dates in the short-term week
     line_throughput[l] : total lbs/hour capacity of line l
-
+    upgrade_pct[k]     : upgrade percentage for decision k
     gamma              : penalty on week 1 unmet / over-production deviation
     """
 
@@ -69,11 +68,26 @@ def build_model(
     m.line_of_k = Param(m.K, initialize=line_of_k, within=m.L)
     m.line_throughput = Param(m.L, initialize=line_throughput, within=PositiveReals)
 
-    m.big_allowed = Param(m.P, initialize=big_allowed, within=Binary)
-    m.small_allowed = Param(m.P, initialize=small_allowed, within=Binary)
-
+    m.upgrade_pct = Param(m.K, initialize=upgrade_pct, within=NonNegativeReals)
     # month_of_day is easier as a plain Python dict for filtering
     month_of_day_dict = dict(month_of_day)
+    k_list = list(K_set)
+    resolved_bucket_of_k = {
+        k: bucket_of_k.get(k, bucket_of_k.get(str(k)))
+        for k in k_list
+    }
+    resolved_line_of_k = {
+        k: line_of_k.get(k, line_of_k.get(str(k)))
+        for k in k_list
+    }
+    k_by_bucket = {
+        b: [k for k in k_list if resolved_bucket_of_k.get(k) == b]
+        for b in list(B_set)
+    }
+    k_by_line = {
+        l: [k for k in k_list if resolved_line_of_k.get(k) == l]
+        for l in list(L_set)
+    }
 
     # =========================
     # Decision Variables
@@ -87,19 +101,13 @@ def build_model(
     # dev[p,t] = |prod[p,t] - D_week1[p,t]| for week 1 only
     m.dev = Var(m.P, m.Week1Dates, domain=NonNegativeReals)
 
-    # prod_big[p,t] = lbs of sku p produced from big bird on date t
-    m.prod_big = Var(m.P, m.T, domain=NonNegativeReals)
-
-    # prod_small[p,t] = lbs of sku p produced from small bird on date t
-    m.prod_small = Var(m.P, m.T, domain=NonNegativeReals)
-
     # =========================
     # Constraints
     # =========================
 
     # 1) WIP availability by bucket and date
     def bucket_wip_rule(m, b, t):
-        relevant_k = [k for k in m.K if value(m.bucket_of_k[k]) == b]
+        relevant_k = k_by_bucket.get(b, [])
 
         if not relevant_k:
             return Constraint.Skip
@@ -110,20 +118,24 @@ def build_model(
 
     # 2) Line-hour capacity by line and date
     def line_capacity_rule(m, l, t):
+        relevant_k = k_by_line.get(l, [])
+        if not relevant_k:
+            return Constraint.Skip
         return sum(
             m.x[k, t] / m.R[k]
-            for k in m.K
-            if value(m.line_of_k[k]) == l
+            for k in relevant_k
         ) <= m.H[l, t]
 
     m.LineCapacityConstraint = Constraint(m.L, m.T, rule=line_capacity_rule)
 
     # 3) Line throughput capacity by line and date
     def line_throughput_rule(m, l, t):
+        relevant_k = k_by_line.get(l, [])
+        if not relevant_k:
+            return Constraint.Skip
         return sum(
             m.x[k, t]
-            for k in m.K
-            if value(m.line_of_k[k]) == l
+            for k in relevant_k
         ) <= m.line_throughput[l] * m.H[l, t]
 
     m.LineThroughputConstraint = Constraint(m.L, m.T, rule=line_throughput_rule)
@@ -166,21 +178,6 @@ def build_model(
 
     m.DevNegConstraint = Constraint(m.P, m.Week1Dates, rule=dev_neg_rule)
 
-    # 8) Big/Small Bird Split
-    def production_split_rule(m, p, t):
-        return m.prod[p, t] == m.prod_big[p, t] + m.prod_small[p, t]
-
-    m.ProductionSplitConstraint = Constraint(m.P, m.T, rule=production_split_rule)
-
-    def big_eligibility_rule(m, p, t):
-        return m.prod_big[p, t] <= 1000000 * m.big_allowed[p]
-
-    m.BigEligibilityConstraint = Constraint(m.P, m.T, rule=big_eligibility_rule)
-
-    def small_eligibility_rule(m, p, t):
-        return m.prod_small[p, t] <= 1000000 * m.small_allowed[p]
-
-    m.SmallEligibilityConstraint = Constraint(m.P, m.T, rule=small_eligibility_rule)
     # =========================
     # Objective Function
     # =========================

@@ -44,16 +44,6 @@ def _is_nugget_product(product_type: Optional[str]) -> bool:
     """Return True for any supported nugget product-type alias."""
     return product_type in {"NUGGET", NUGGET_SKU_KEY}
 
-
-def _bucket_min_weight(bucket: Dict[str, Any]) -> float:
-    """Return the bucket's minimum weight, accepting legacy field aliases."""
-    if "minWeight" in bucket:
-        return bucket["minWeight"]
-    if "targetWeight" in bucket:
-        return bucket["targetWeight"]
-    raise KeyError("bucket must include 'minWeight' or 'targetWeight'")
-
-
 def _bucket_target_weight(bucket: Dict[str, Any]) -> float:
     """Return the bucket's target weight, accepting legacy field aliases."""
     if "targetWeight" in bucket:
@@ -68,6 +58,11 @@ def _bucket_max_weight(bucket: Dict[str, Any]) -> float:
     if "maxWeight" in bucket:
         return bucket["maxWeight"]
     raise KeyError("bucket must include 'maxWeight'")
+
+
+def _effective_bucket_target_weight(bucket: Dict[str, Any], tolerance_pct: float) -> float:
+    """Return the tolerance-adjusted bucket target used for fit enforcement."""
+    return _bucket_target_weight(bucket) * (1.0 - tolerance_pct)
 
 
 def _combo_sku_keys(combo: List[Dict[str, Any]]) -> List[str]:
@@ -500,21 +495,21 @@ def _build_mix(
 
 def _fits_bucket(mix_weight: float, bucket: Dict, tolerance_pct: float) -> bool:
     """
-    Determine whether a mix weight can be produced in a bucket.
+    Determine whether a planned mix weight can be produced in a bucket.
 
-    The bucket's ``targetWeight`` is the hard upper bound.
+    The bucket's tolerance-adjusted ``targetWeight`` is the hard upper bound.
 
     Args:
-        mix_weight: Total weight of the mix (sum of SKU targetWeights).
+        mix_weight: Total planned weight of the persisted unit plan.
         bucket: Bucket document with ``minWeight``, ``targetWeight``, and
             ``maxWeight`` fields.
         tolerance_pct: Retained for compatibility with existing callers.
 
     Returns:
-        ``True`` when ``mix_weight <= bucket["maxWeight"]``,
+        ``True`` when the planned weight is within the effective target,
         ``False`` otherwise.
     """
-    return mix_weight <= _bucket_target_weight(bucket) * (1.0 - tolerance_pct)
+    return mix_weight <= _effective_bucket_target_weight(bucket, tolerance_pct)
 
 def _planned_bucket_weight(
     combo: List[Dict],
@@ -530,7 +525,9 @@ def _planned_bucket_weight(
     ``unitPlan``. Otherwise a combo can appear to fit by raw target-weight sum
     while the persisted plan materially exceeds the bucket bounds.
     """
-    bucket_target_weight = _bucket_target_weight(bucket) * (1.0 - config_values.get("tolerance_pct", 0.0))
+    bucket_target_weight = _effective_bucket_target_weight(
+        bucket, config_values.get("tolerance_pct", 0.0)
+    )
     fixed_weight = 0.0
     nugget_weight = 0.0
 
@@ -625,6 +622,8 @@ def _compute_mix_metric(
     planned_mix_weight = 0.0
     planned_fds_weight = 0.0
     planned_rtl_weight = 0.0
+    tolerance_pct = config_values.get("tolerance_pct", 0.0)
+    effective_bucket_target = _effective_bucket_target_weight(bucket, tolerance_pct)
     fixed_non_nugget_weight = sum(
         sku.get("unitsPerCut", 1) * sku["targetWeight"]
         for sku in combo
@@ -637,7 +636,7 @@ def _compute_mix_metric(
     )
     if includes_nug and nugget_target_weight is not None and nugget_target_weight > 0 and fixed_non_nugget_weight <= 0.0:
         raise ValueError("Nugget-only mixes are not allowed")
-    remaining_nugget_weight = max(0.0, _bucket_target_weight(bucket) - fixed_non_nugget_weight)
+    remaining_nugget_weight = max(0.0, effective_bucket_target - fixed_non_nugget_weight)
 
     if part_assignments is None:
         part_assignments = [skus_map.get(str(sku["tradeNumber"]), "") for sku in combo]
@@ -683,8 +682,8 @@ def _compute_mix_metric(
         for item in unit_plan:
             item["pctOfTotal"] = 0.0
 
-    min_weight = _bucket_min_weight(bucket)
-    target_weight = _bucket_target_weight(bucket) * (1.0 - config_values.get("tolerance_pct", 0.0))
+    min_weight = _bucket_target_weight(bucket)
+    target_weight = effective_bucket_target
     upgrade_mu = config_values.get("upgrade_mu", 0.0)
     upgrade_sigma = config_values.get("upgrade_sigma", 0.0)
     max_weight = bucket["maxWeight"]
@@ -802,6 +801,20 @@ def _upsert_mix_metric(metric_repo: MixMetricRepository, metric_doc: Dict[str, A
             metric_repo.update(metric_doc["_id"], metric_doc)
 
 
+def _clear_existing_mix_data(
+    mix_repo: MixRepository,
+    metric_repo: MixMetricRepository,
+) -> None:
+    """Remove all previously persisted mixes and mix metrics before a run."""
+    deleted_metrics = metric_repo.collection.delete_many({}).deleted_count
+    deleted_mixes = mix_repo.collection.delete_many({}).deleted_count
+    logger.info(
+        "Cleared %d mix_metrics and %d mixes before enumeration run",
+        deleted_metrics,
+        deleted_mixes,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Remaining phases — stubs (implemented in subsequent tasks)
 # ---------------------------------------------------------------------------
@@ -862,6 +875,7 @@ def run_enumeration(
     sku_count = len(skus)
     mix_repo = MixRepository(db)
     metric_repo = MixMetricRepository(db)
+    _clear_existing_mix_data(mix_repo, metric_repo)
 
     # Build initial stage list for mark_running
     initial_stage_list = [
@@ -875,10 +889,7 @@ def run_enumeration(
         stage_index = stage  # 1-based
 
         # Generate all combos for this stage, filtered to at-most-one nugget
-        all_combos = [
-            c for c in itertools.combinations_with_replacement(skus, stage)
-            if sum(1 for s in c if s["productType"] == "NUGGET") <= 1
-        ]
+        all_combos = list(itertools.combinations_with_replacement(skus, stage))
         total = len(all_combos)
 
         job_repo.mark_stage_running(job_id, stage_index, total)
@@ -897,12 +908,17 @@ def run_enumeration(
             for strategy in valid_strategies:
                 mix_doc = _build_mix(combo, strategy, plant_filter, bird_size_filter)
                 part_assignments = mix_doc.pop("_partAssignments", None)
-                mix_weight = sum(s["targetWeight"] for s in combo)
-
                 # Check bucket capacity and compute metrics.
                 fitting_metrics = []
                 for bucket in buckets:
-                    if _fits_bucket(mix_weight, bucket, config_values["tolerance_pct"]):
+                    planned_weight = _planned_bucket_weight(
+                        combo,
+                        bucket,
+                        mix_doc["includesNug"],
+                        config_values,
+                        mix_doc.get("nuggetTargetWeight"),
+                    )
+                    if _fits_bucket(planned_weight, bucket, config_values["tolerance_pct"]):
                         metric = _compute_mix_metric(
                             None,
                             combo,
@@ -913,7 +929,8 @@ def run_enumeration(
                             config_values,
                             part_assignments=part_assignments,
                         )
-                        fitting_metrics.append(metric)
+                        if metric["totalProductProducedGrams"] <= _bucket_target_weight(bucket):
+                            fitting_metrics.append(metric)
 
                 # Only persist if at least one bucket can accommodate the mix.
                 if fitting_metrics:

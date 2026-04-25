@@ -10,6 +10,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from views.scheduling_shared import (  # noqa: E402
+    build_upcoming_batches,
     build_bucket_usage_summary,
     build_demand_progress,
     build_line_utilization,
@@ -40,6 +41,22 @@ def test_build_todays_and_upcoming_cuts():
     assert len(today) == 2
     assert len(upcoming) == 1
     assert upcoming.iloc[0]["line"] == "DSI884"
+
+
+def test_build_upcoming_batches_filters_next_few_days():
+    frame = pd.DataFrame(
+        [
+            {"date": "2026-04-15", "lineId": "DSI884", "mixId": "mix-a", "lbsProduced": 1000.0, "duration": 4.0},
+            {"date": "2026-04-16", "lineId": "DB20", "mixId": "mix-b", "lbsProduced": 800.0, "duration": 3.0},
+            {"date": "2026-04-20", "lineId": "DB20", "mixId": "mix-c", "lbsProduced": 700.0, "duration": 2.5},
+        ]
+    )
+    focus = pd.Timestamp("2026-04-15")
+    upcoming = build_upcoming_batches(frame, focus, days=3)
+
+    assert len(upcoming) == 1
+    assert upcoming.iloc[0]["line"] == "DB20"
+    assert upcoming.iloc[0]["mixId"] == "mix-b"
 
 
 def test_build_demand_progress_and_line_utilization():
@@ -80,4 +97,19 @@ def test_build_bucket_usage_summary():
     summary = build_bucket_usage_summary(frame, pd.Timestamp("2026-04-15"), pd.Timestamp("2026-04-16"))
     assert list(summary["bucket"]) == ["B 0-390", "B 390-440"]
     assert summary.iloc[0]["used_lbs"] == 50.0
+
+
+def test_build_bucket_usage_summary_supports_api_field_names():
+    frame = pd.DataFrame(
+        [
+            {"date": "2026-04-15", "bucketId": "B 0-390", "utilizedLbs": 30.0, "availableLbs": 100.0},
+            {"date": "2026-04-16", "bucketId": "B 0-390", "utilizedLbs": 20.0, "availableLbs": 100.0},
+        ]
+    )
+
+    summary = build_bucket_usage_summary(frame, pd.Timestamp("2026-04-15"), pd.Timestamp("2026-04-16"))
+
+    assert list(summary["bucket"]) == ["B 0-390"]
+    assert summary.iloc[0]["used_lbs"] == 50.0
+    assert summary.iloc[0]["available_lbs"] == 100.0
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 
+from pymongo.errors import PyMongoError
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,9 @@ from scheduling_shared.models.monthly_contract_demand import MonthlyContractDema
 from scheduling_shared.models.monthly_contract_demand import MonthlyContractDemandBulkSearchRequest  # noqa: E402
 from scheduling_shared.models.monthly_contract_demand import MonthlyContractDemandCreate  # noqa: E402
 from scheduling_shared.models.scheduling_decision import SchedulingDecisionCreate  # noqa: E402
+from scheduling_shared.models.scheduling_output import SchedulingOutputCreate  # noqa: E402
 from routers import available_wip_router, job_artifacts_router, monthly_contract_demand_router  # noqa: E402
+from repositories.scheduling_decision_repository import SchedulingDecisionRepository  # noqa: E402
 
 
 client = TestClient(app)
@@ -64,9 +67,27 @@ def test_scheduling_decision_model_validation():
         date="2026-04-15",
         duration=6.5,
         lbsProduced=2400.0,
+        upgradePct=0.0875,
     )
     assert model.line_id == "DSI884"
     assert model.lbs_produced == 2400.0
+    assert model.upgrade_pct == 0.0875
+
+
+def test_scheduling_output_model_validation():
+    model = SchedulingOutputCreate(
+        decisionId="decision-001",
+        skuId="50624",
+        date="2026-04-15",
+        batchUpgradePct=0.0875,
+        lbsProduced=2400.0,
+        shortTermContractLbs=1200.0,
+        longTermContractLbs=2600.0,
+    )
+    assert model.decision_id == "decision-001"
+    assert model.batch_upgrade_pct == 0.0875
+    assert model.short_term_contract_lbs == 1200.0
+    assert model.long_term_contract_lbs == 2600.0
 
 
 def test_available_wip_model_validation():
@@ -221,3 +242,33 @@ def test_job_artifact_download_streams_csv(monkeypatch):
     assert response.status_code == 200
     assert response.headers["content-disposition"] == 'attachment; filename="line_schedule.csv"'
     assert response.text == "date,line\n2026-04-15,DSI884\n"
+
+
+def test_scheduling_decision_bulk_create_surfaces_database_errors():
+    class FakeCollection:
+        def create_index(self, *args, **kwargs):
+            return None
+
+        def insert_many(self, documents, ordered=False):
+            raise PyMongoError("boom")
+
+    repository = SchedulingDecisionRepository.__new__(SchedulingDecisionRepository)
+    repository.collection = FakeCollection()
+
+    try:
+        repository.bulk_create(
+            [
+                {
+                    "_id": "decision-1",
+                    "mixId": "mix-1",
+                    "lineId": "DSI884",
+                    "date": "2026-04-15",
+                    "duration": 1.0,
+                    "lbsProduced": 100.0,
+                    "upgradePct": 0.1,
+                }
+            ]
+        )
+        raise AssertionError("Expected bulk_create to raise on Mongo errors")
+    except Exception as exc:
+        assert "bulk creating scheduling decisions" in str(exc)

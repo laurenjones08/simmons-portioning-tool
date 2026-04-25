@@ -39,14 +39,12 @@ def render():
         "<div class='simmons-card' style='margin-top:12px;margin-bottom:18px'>"
         "<div style='display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start'>"
         "<div style='min-width:320px;flex:1'>"
-        "<div style='font-size:30px;font-weight:800;color:#00264F'>Scheduling control center</div>"
+        "<div style='font-size:30px;font-weight:800;color:#00264F'>Scheduling Control Center</div>"
         "<div class='simmons-small' style='margin-top:6px'>"
         "Choose between launching a new run and exploring the scheduling tables and metrics."
         "</div></div>"
         "<div style='min-width:320px;flex:1'>"
-        "<div class='simmons-small'>"
-        "The create view focuses on inputs, while the insights view focuses on cuts, demand, and utilization."
-        "</div></div></div></div>",
+        "</div></div></div>",
         unsafe_allow_html=True,
     )
 
@@ -64,7 +62,7 @@ def render():
     with m1:
         st.markdown(
             f"<div class='simmons-card'><div class='simmons-small'>Total scheduling runs</div>"
-            f"<div style='font-size:34px;font-weight:800;color:#0046AD'>{len(jobs)}</div></div>",
+            f"<div style='font-size:34px;font-weight:800;color:#0046AD;margin-bottom:18px''>{len(jobs)}</div></div>",
             unsafe_allow_html=True,
         )
     with m2:

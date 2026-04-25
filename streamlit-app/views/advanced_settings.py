@@ -13,11 +13,15 @@ import streamlit as st
 from api_client import (
     batch_import_skus,
     create_bucket,
+    create_available_wip,
+    delete_available_wip,
     get_all_configs,
     list_lines,
+    search_available_wip,
     search_buckets,
     search_cut_strategies,
     search_skus,
+    update_available_wip,
     update_bucket,
     update_config,
     update_cut_strategy,
@@ -176,6 +180,12 @@ def _bucket_rows(buckets: list[dict]) -> list[dict[str, Any]]:
     ]
 
 
+def _bucket_label(bucket: dict[str, Any]) -> str:
+    min_weight = bucket.get("minWeight", "")
+    max_weight = bucket.get("maxWeight", "")
+    return f"{bucket.get('_id', '')} ({min_weight} - {max_weight})"
+
+
 def _bucket_payload(row: dict[str, Any], original: dict[str, Any]) -> dict[str, Any]:
     return {
         "minWeight": _require_float(row.get("minWeight", original.get("minWeight", 0.0)), "minWeight"),
@@ -322,6 +332,37 @@ def _line_payload(row: dict[str, Any], original: dict[str, Any]) -> dict[str, An
             row.get("permittedCutStrategyIds", original.get("permittedCutStrategyIds", []))
         ),
         "isActive": _parse_bool(row.get("isActive", original.get("isActive", True))),
+    }
+
+
+def _available_wip_rows(rows: list[dict]) -> list[dict[str, Any]]:
+    return [
+        {
+            "availableWipId": row.get("_id", ""),
+            "plantName": row.get("plantName", ""),
+            "bucketId": row.get("bucketId", ""),
+            "availableLbs": row.get("availableLbs", 0.0),
+        }
+        for row in rows
+    ]
+
+
+def _available_wip_payload(row: dict[str, Any], original: dict[str, Any]) -> dict[str, Any]:
+    plant_name = str(row.get("plantName", original.get("plantName", ""))).strip()
+    bucket_id = str(row.get("bucketId", original.get("bucketId", ""))).strip()
+    available_lbs = _require_float(row.get("availableLbs", original.get("availableLbs", 0.0)), "availableLbs")
+
+    if not plant_name:
+        raise ValueError("plantName is required.")
+    if not bucket_id:
+        raise ValueError("bucketId is required.")
+    if available_lbs < 0:
+        raise ValueError("availableLbs must be greater than or equal to 0.")
+
+    return {
+        "plantName": plant_name,
+        "bucketId": bucket_id,
+        "availableLbs": available_lbs,
     }
 
 
@@ -646,6 +687,222 @@ def render():
                     st.error(str(exc))
         else:
             st.info("No lines configured.")
+
+        st.markdown("**Create Line**")
+        with st.form("create_line_form", clear_on_submit=True):
+            create_line_col1, create_line_col2 = st.columns(2)
+            with create_line_col1:
+                create_line_id = st.text_input("Line ID *", help="Unique identifier used by other APIs.")
+                create_friendly_name = st.text_input("Friendly name *")
+                create_line_type = st.selectbox(
+                    "Line type *",
+                    options=["DB20", "DSI884", "DSI888"],
+                    key="advanced_settings_create_line_type",
+                )
+                create_plant = (
+                    st.selectbox(
+                        "Plant *",
+                        options=plant_options,
+                        key="advanced_settings_create_line_plant",
+                    )
+                    if plant_options
+                    else st.text_input("Plant *", key="advanced_settings_create_line_plant")
+                )
+            with create_line_col2:
+                create_hours_of_labor = st.number_input(
+                    "Hours of labor available per shift *",
+                    min_value=0.1,
+                    value=8.0,
+                    step=0.5,
+                    key="advanced_settings_create_line_hours",
+                )
+                create_units_available = st.number_input(
+                    "Units available *",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    key="advanced_settings_create_line_units",
+                )
+                create_line_throughput = st.number_input(
+                    "Line throughput",
+                    min_value=0.0,
+                    value=0.0,
+                    step=1.0,
+                    key="advanced_settings_create_line_throughput",
+                )
+                create_is_active = st.checkbox(
+                    "Active",
+                    value=True,
+                    key="advanced_settings_create_line_active",
+                )
+
+            create_strategy_ids, create_strategy_labels = _strategy_options_for_line(
+                strategies,
+                create_line_type,
+            )
+            create_cut_strategy_ids = st.multiselect(
+                "Permitted cut strategies",
+                options=create_strategy_ids,
+                format_func=lambda strategy_id: create_strategy_labels.get(strategy_id, strategy_id),
+                key="advanced_settings_create_line_strategies",
+            )
+            create_line_submitted = st.form_submit_button(
+                "Create Line",
+                type="primary",
+                use_container_width=True,
+            )
+
+            if create_line_submitted:
+                payload = {
+                    "lineId": create_line_id.strip(),
+                    "friendlyName": create_friendly_name.strip(),
+                    "lineType": create_line_type,
+                    "plant": create_plant.strip(),
+                    "hoursOfLaborAvailablePerShift": float(create_hours_of_labor),
+                    "unitsAvailable": int(create_units_available),
+                    "lineThroughput": float(create_line_throughput),
+                    "permittedCutStrategyIds": create_cut_strategy_ids,
+                    "isActive": create_is_active,
+                }
+                try:
+                    from api_client import create_line as create_line_api
+
+                    create_line_api(payload)
+                    st.success("Line created.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+
+    with st.expander("Available WIP", expanded=False):
+        configs = _safe_load(get_all_configs)
+        plant_options = _plant_options(configs)
+        buckets = _safe_load(lambda: search_buckets({}))
+        bucket_options = [bucket.get("_id", "") for bucket in buckets if bucket.get("_id")]
+        bucket_labels = {
+            bucket.get("_id", ""): _bucket_label(bucket)
+            for bucket in buckets
+            if bucket.get("_id")
+        }
+        available_wip = _safe_load(lambda: search_available_wip({}))
+
+        if not plant_options:
+            st.warning("No plants found in the global config (mix.availablePlants).")
+        if not bucket_options:
+            st.warning("No buckets are currently available from the Enumeration API.")
+
+        if available_wip:
+            editor = st.data_editor(
+                _build_editor_frame(_available_wip_rows(available_wip)),
+                key="advanced_settings_available_wip_editor",
+                hide_index=True,
+                num_rows="fixed",
+                use_container_width=True,
+                disabled=["availableWipId"],
+                column_config={
+                    "availableWipId": st.column_config.TextColumn("Available WIP ID", disabled=True, pinned=True),
+                    "plantName": st.column_config.SelectboxColumn("Plant", options=plant_options or None, required=True),
+                    "bucketId": st.column_config.SelectboxColumn(
+                        "Bucket",
+                        options=bucket_options or None,
+                        required=True,
+                        format_func=lambda bucket_id: bucket_labels.get(bucket_id, bucket_id),
+                    ),
+                    "availableLbs": st.column_config.NumberColumn("Available lbs", min_value=0.0, step=1.0),
+                },
+            )
+            if st.button(
+                "Save Available WIP Changes",
+                key="save_available_wip_changes",
+                type="primary",
+                use_container_width=True,
+            ):
+                _save_updates(
+                    editor.to_dict(orient="records"),
+                    available_wip,
+                    "availableWipId",
+                    update_available_wip,
+                    _available_wip_payload,
+                    "available WIP",
+                )
+        else:
+            st.info("No available WIP rows found.")
+
+        with st.form("create_available_wip_form"):
+            create_col1, create_col2, create_col3 = st.columns(3)
+            with create_col1:
+                create_plant = (
+                    st.selectbox("Plant *", options=plant_options, key="advanced_settings_create_wip_plant")
+                    if plant_options
+                    else st.text_input("Plant *", key="advanced_settings_create_wip_plant")
+                )
+            with create_col2:
+                create_bucket_id = (
+                    st.selectbox(
+                        "Bucket *",
+                        options=bucket_options,
+                        format_func=lambda bucket_id: bucket_labels.get(bucket_id, bucket_id),
+                        key="advanced_settings_create_wip_bucket",
+                    )
+                    if bucket_options
+                    else st.text_input("Bucket *", key="advanced_settings_create_wip_bucket")
+                )
+            with create_col3:
+                create_available_lbs = st.number_input(
+                    "Available lbs *",
+                    min_value=0.0,
+                    value=0.0,
+                    step=1.0,
+                    key="advanced_settings_create_wip_lbs",
+                )
+            create_wip_submitted = st.form_submit_button(
+                "Create Available WIP",
+                type="primary",
+                use_container_width=True,
+            )
+            if create_wip_submitted:
+                try:
+                    create_available_wip(
+                        _available_wip_payload(
+                            {
+                                "plantName": create_plant,
+                                "bucketId": create_bucket_id,
+                                "availableLbs": create_available_lbs,
+                            },
+                            {},
+                        )
+                    )
+                    st.success("Available WIP created.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+
+        if available_wip:
+            available_wip_lookup = {
+                row.get("_id", ""): row
+                for row in available_wip
+                if row.get("_id")
+            }
+            selected_available_wip_id = st.selectbox(
+                "Delete selected WIP row",
+                options=list(available_wip_lookup.keys()),
+                format_func=lambda wip_id: (
+                    f"{available_wip_lookup[wip_id].get('plantName', '')} / "
+                    f"{bucket_labels.get(available_wip_lookup[wip_id].get('bucketId', ''), available_wip_lookup[wip_id].get('bucketId', ''))} / "
+                    f"{available_wip_lookup[wip_id].get('availableLbs', 0.0)} lbs"
+                ),
+                key="advanced_settings_delete_wip_id",
+            )
+            if st.button(
+                "Delete Available WIP",
+                key="delete_available_wip",
+                type="secondary",
+            ):
+                try:
+                    delete_available_wip(selected_available_wip_id)
+                    st.success("Available WIP deleted.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
 
     with st.expander("Global Config", expanded=False):
         configs = _safe_load(get_all_configs)

@@ -610,7 +610,7 @@ def bucket_strategy(draw):
 
 
 tolerance_pct_strategy = st.floats(
-    min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False
+    min_value=0.0, max_value=0.99, allow_nan=False, allow_infinity=False
 )
 
 
@@ -619,36 +619,39 @@ tolerance_pct_strategy = st.floats(
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
-@given(bucket=bucket_strategy(), tolerance_pct=tolerance_pct_strategy)
+@given(bucket=bucket_strategy())
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property12_mix_weight_at_min_weight_fits(bucket, tolerance_pct):
+def test_property12_mix_weight_at_min_weight_fits(bucket):
     """
     Property 12: A mix weight exactly equal to bucket.minWeight fits the bucket.
 
     **Validates: Requirements 6.5, 6.6**
     """
+    tolerance_pct = 0.0
     assert _fits_bucket(bucket["minWeight"], bucket, tolerance_pct), (
         f"mix_weight={bucket['minWeight']} should fit bucket "
-        f"with maxWeight={bucket['maxWeight']}"
+        f"with targetWeight={bucket['targetWeight']}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Property 13 â€” A mix weight exactly equal to bucket.targetWeight fits the bucket
+# Property 13 â€” A mix weight exactly equal to the effective target fits the bucket
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
 @given(bucket=bucket_strategy(), tolerance_pct=tolerance_pct_strategy)
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property13_mix_weight_at_target_weight_fits(bucket, tolerance_pct):
+def test_property13_mix_weight_at_effective_target_fits(bucket, tolerance_pct):
     """
-    Property 13: A mix weight exactly equal to bucket.targetWeight fits the bucket.
+    Property 13: A mix weight exactly equal to the tolerance-adjusted target
+    fits the bucket.
 
     **Validates: Requirements 6.5, 6.6**
     """
-    assert _fits_bucket(bucket["targetWeight"], bucket, tolerance_pct), (
-        f"mix_weight={bucket['targetWeight']} (targetWeight) should fit bucket "
-        f"[effective_min, {bucket['targetWeight']}]"
+    effective_target = bucket["targetWeight"] * (1.0 - tolerance_pct)
+    assert _fits_bucket(effective_target, bucket, tolerance_pct), (
+        f"mix_weight={effective_target} (effective target) should fit bucket "
+        f"with targetWeight={bucket['targetWeight']} and tolerance_pct={tolerance_pct}"
     )
 
 
@@ -671,14 +674,15 @@ def test_property14_mix_weight_below_min_weight_still_fits(bucket, tolerance_pct
     **Validates: Requirements 6.5, 6.6**
     """
     mix_weight = bucket["minWeight"] - delta
+    assume(mix_weight <= bucket["targetWeight"] * (1.0 - tolerance_pct))
     assert _fits_bucket(mix_weight, bucket, tolerance_pct), (
         f"mix_weight={mix_weight} is below minWeight={bucket['minWeight']} "
-        f"but should still be offered if it does not exceed maxWeight={bucket['maxWeight']}"
+        f"but should still be offered if it does not exceed the effective target"
     )
 
 
 # ---------------------------------------------------------------------------
-# Property 15 â€” A mix weight above bucket.maxWeight does not fit the bucket
+# Property 15 â€” A mix weight above the effective target does not fit the bucket
 # **Validates: Requirements 6.5, 6.6**
 # ---------------------------------------------------------------------------
 
@@ -688,15 +692,17 @@ def test_property14_mix_weight_below_min_weight_still_fits(bucket, tolerance_pct
     delta=st.floats(min_value=1e-6, max_value=1.0, allow_nan=False, allow_infinity=False),
 )
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_property15_mix_weight_above_max_weight_does_not_fit(bucket, tolerance_pct, delta):
+def test_property15_mix_weight_above_effective_target_does_not_fit(bucket, tolerance_pct, delta):
     """
-    Property 15: A mix weight strictly above bucket.maxWeight does not fit the bucket.
+    Property 15: A mix weight strictly above the tolerance-adjusted target
+    does not fit the bucket.
 
     **Validates: Requirements 6.5, 6.6**
     """
-    mix_weight = bucket["maxWeight"] + delta
+    mix_weight = (bucket["targetWeight"] * (1.0 - tolerance_pct)) + delta
     assert not _fits_bucket(mix_weight, bucket, tolerance_pct), (
-        f"mix_weight={mix_weight} is above maxWeight={bucket['maxWeight']} "
+        f"mix_weight={mix_weight} is above the effective target for "
+        f"targetWeight={bucket['targetWeight']} and tolerance_pct={tolerance_pct} "
         f"and should NOT fit the bucket"
     )
 

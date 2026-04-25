@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import random
 import socket
@@ -16,6 +17,8 @@ from urllib import error, request
 import pandas as pd
 from storage import download_object_bytes
 
+logger = logging.getLogger(__name__)
+
 
 # -----------------------------------------------------------------------------
 # API client helpers
@@ -23,6 +26,7 @@ from storage import download_object_bytes
 
 UPGRADE_MU_CONFIG_KEY = "enumeration.upgradeDistributionMu"
 UPGRADE_SIGMA_CONFIG_KEY = "enumeration.upgradeDistributionSigma"
+DEFAULT_MAX_TRIM_PERCENTAGE = 25.0
 _STANDARD_NORMAL = NormalDist(mu=0.0, sigma=1.0)
 
 
@@ -145,15 +149,24 @@ class EnumerationApiClient(BaseApiClient):
     def list_cut_strategies(self) -> List[dict]:
         return self._request_json("/cut-strategies/search", method="POST", payload={}) or []
 
-    def list_mix_metrics(self, sku_trade_numbers: Optional[Sequence[str]] = None) -> List[dict]:
+    def list_mix_metrics(
+        self,
+        sku_trade_numbers: Optional[Sequence[str]] = None,
+        max_trim_percentage: Optional[float] = None,
+    ) -> List[dict]:
         if not sku_trade_numbers:
-            return self._request_json("/metrics/search", method="POST", payload={}) or []
+            payload = {}
+            if max_trim_percentage is not None:
+                payload["maxTrimPercentage"] = max_trim_percentage
+            return self._request_json("/metrics/search", method="POST", payload=payload) or []
 
         metrics_by_id: Dict[str, dict] = {}
         for sku_trade_number in _normalize_ids(sku_trade_numbers):
             if not sku_trade_number:
                 continue
             payload = {"skuTradeNumber": sku_trade_number}
+            if max_trim_percentage is not None:
+                payload["maxTrimPercentage"] = max_trim_percentage
             for metric in self._request_json("/metrics/search", method="POST", payload=payload) or []:
                 metric_id = str(metric.get("_id") or metric.get("metricId") or "").strip()
                 if metric_id:
@@ -324,6 +337,19 @@ def _demo_value_map() -> Dict[str, float]:
         "P3_DB20": 2.8,
         "P4_DB20": 3.2,
         "P5_DSI888": 1.9,
+    }
+
+def _demo_upgrade_map() -> Dict[str, float]:
+    return{
+        "P1_DSI888": 0.08,
+        "P1_DB20": 0.07,
+        "P2_DSI888": 0.10,
+        "P2_DSI884": 0.09,
+        "P3_DSI884": 0.12,
+        "P3_DB20": 0.11,
+        "P4_DB20": 0.15,
+        "P5_DSI888": 0.05,
+        "pack_DSI884": 0.06,
     }
 
 
@@ -722,6 +748,7 @@ class SchedulingWorkerDataPrep:
         self,
         sku_ids: Sequence[str] | None = None,
         due_dates: Sequence[pd.Timestamp] | None = None,
+        max_trim_percentage: Optional[float] = None,
         progress_callback: Optional[Callable[[str, Optional[str], Optional[Dict[str, Any]]], None]] = None,
     ) -> DataPrepSources:
         api_timings: Dict[str, float] = {}
@@ -744,11 +771,24 @@ class SchedulingWorkerDataPrep:
             mixes=timed_fetch("mixes", self.enumeration_api.list_mixes),
             buckets=timed_fetch("buckets", self.enumeration_api.list_buckets),
             cut_strategies=timed_fetch("cut_strategies", self.enumeration_api.list_cut_strategies),
-            mix_metrics=timed_fetch("mix_metrics", lambda: self.enumeration_api.list_mix_metrics(sku_ids)),
+            mix_metrics=timed_fetch("mix_metrics", lambda: self._load_mix_metrics(sku_ids, max_trim_percentage)),
             lines=timed_fetch("lines", self.config_api.list_lines),
             configs=timed_fetch("configs", self.config_api.list_configs),
             api_timings=api_timings,
         )
+
+    def _load_mix_metrics(
+        self,
+        sku_ids: Sequence[str] | None,
+        max_trim_percentage: Optional[float],
+    ) -> List[dict]:
+        try:
+            return self.enumeration_api.list_mix_metrics(
+                sku_trade_numbers=sku_ids,
+                max_trim_percentage=max_trim_percentage,
+            )
+        except TypeError:
+            return self.enumeration_api.list_mix_metrics(sku_ids)
 
     def _prepare_demo_inputs(self, P: Sequence[str], T: Sequence[pd.Timestamp], week1_dates: Sequence[pd.Timestamp], M: Sequence[pd.Period]) -> Dict[str, Any]:
         K = _demo_decisions()
@@ -815,6 +855,37 @@ class SchedulingWorkerDataPrep:
                 continue
             metrics.append(metric)
         return metrics
+
+    def _filter_skus_with_available_metrics(
+        self,
+        sku_ids: Sequence[str],
+        metrics: Sequence[dict],
+    ) -> tuple[List[str], List[str]]:
+        selected = _normalize_ids(sku_ids)
+        if not selected:
+            return [], []
+
+        available_skus: set[str] = set()
+        for metric in metrics:
+            available_skus.update(_metric_sku_keys(metric))
+
+        kept_skus = [sku_id for sku_id in selected if sku_id in available_skus]
+        removed_skus = [sku_id for sku_id in selected if sku_id not in available_skus]
+        return kept_skus, removed_skus
+
+    def _filter_monthly_contract_to_skus(
+        self,
+        monthly_contract: Dict[tuple[str, pd.Period], float],
+        sku_ids: Sequence[str],
+    ) -> Dict[tuple[str, pd.Period], float]:
+        selected = set(_normalize_ids(sku_ids))
+        if not selected:
+            return {}
+        return {
+            (sku_id, month): value
+            for (sku_id, month), value in monthly_contract.items()
+            if sku_id in selected
+        }
 
     def _select_mixes(self, sources: DataPrepSources, mix_ids: Sequence[str]) -> List[dict]:
         wanted = set(_normalize_ids(mix_ids))
@@ -1147,6 +1218,26 @@ class SchedulingWorkerDataPrep:
             filtered.append(metric)
         return filtered
 
+    def _filter_metrics_by_trim(
+        self,
+        metrics: Sequence[dict],
+        max_trim_percentage: Optional[float],
+    ) -> List[dict]:
+        if max_trim_percentage is None:
+            return list(metrics)
+
+        filtered: List[dict] = []
+        for metric in metrics:
+            trim_percentage = _safe_float(
+                metric.get("trimPercentage")
+                or metric.get("trim_percentage")
+                or metric.get("trimPct")
+                or metric.get("trim_pct")
+            )
+            if trim_percentage is None or trim_percentage <= max_trim_percentage:
+                filtered.append(metric)
+        return filtered
+
     def _build_yield_map(self, metrics: Sequence[dict], parts: Sequence[str]) -> Dict[tuple[str, str], float]:
         part_set = set(parts)
         yield_map: Dict[tuple[str, str], float] = {}
@@ -1174,6 +1265,38 @@ class SchedulingWorkerDataPrep:
             return _demo_yield_map()
         return {}
 
+    def _build_decision_output_shares(self, metrics: Sequence[dict]) -> Dict[str, List[Dict[str, float | str]]]:
+        shares: Dict[str, Dict[str, float]] = {}
+        for metric in metrics:
+            metric_id = _metric_id(metric)
+            if not metric_id:
+                continue
+
+            metric_shares = shares.setdefault(metric_id, {})
+            unit_plan = _metric_unit_plan(metric)
+            metric_total = sum(
+                _safe_float(item.get("totalWeightInPlan") or item.get("total_weight_in_plan")) or 0.0
+                for item in unit_plan
+            )
+
+            for item in unit_plan:
+                sku = _clean_str(item.get("sku"))
+                if not sku:
+                    continue
+                pct = _safe_float(item.get("pctOfTotal") or item.get("pct_of_total"))
+                if pct is None:
+                    weight = _safe_float(item.get("totalWeightInPlan") or item.get("total_weight_in_plan")) or 0.0
+                    pct = (weight / metric_total * 100.0) if metric_total > 0 else 0.0
+                metric_shares[sku] = metric_shares.get(sku, 0.0) + (pct / 100.0)
+
+        return {
+            metric_id: [
+                {"skuId": sku_id, "yieldFraction": yield_fraction}
+                for sku_id, yield_fraction in metric_shares.items()
+            ]
+            for metric_id, metric_shares in shares.items()
+        }
+
     def _build_value_map(self, metrics: Sequence[dict]) -> Dict[str, float]:
         values: Dict[str, float] = {}
         for metric in metrics:
@@ -1184,6 +1307,18 @@ class SchedulingWorkerDataPrep:
         if values:
             return values
         return _demo_value_map() if self.use_demo_fallbacks else {}
+
+    def _build_upgrade_map(self, metrics: Sequence[dict]) -> Dict[str, float]:
+        values: Dict[str, float] = {}
+        for metric in metrics:
+            metric_id = _metric_id(metric)
+            value = _safe_float(metric.get("upgradePercentage"))
+            if value is not None:
+                values[metric_id] = value
+        if values:
+            return values
+        return _demo_upgrade_map() if self.use_demo_fallbacks else {}
+
 
     def _build_rate_map(
         self,
@@ -1338,6 +1473,14 @@ class SchedulingWorkerDataPrep:
         plant_id = _clean_str(_job_value(job, "plant_id", "plantId", default=plant_id))
         short_term_file = _job_value(job, "short_term_file", "shortTermFile", default=short_term_file)
         sku_ids = _normalize_ids(_job_value(job, "sku_ids", "skuIds", default=sku_ids))
+        max_trim_percentage = _safe_float(
+            _job_value(
+                job,
+                "max_trim_percentage",
+                "maxTrimPercentage",
+                default=DEFAULT_MAX_TRIM_PERCENTAGE,
+            )
+        )
 
         if not sku_ids and self.use_demo_fallbacks:
             sku_ids = _demo_parts()
@@ -1350,6 +1493,7 @@ class SchedulingWorkerDataPrep:
         future_dates = T[6:]
         M = sorted({d.to_period("M") for d in T})
         month_of_day = {d: d.to_period("M") for d in T}
+        warning_messages: List[Dict[str, Any]] = []
 
         monthly_contract = self._build_monthly_contract(sku_ids, M)
         monthly_contract = self._prorate_monthly_contract_to_horizon(monthly_contract, T)
@@ -1373,12 +1517,40 @@ class SchedulingWorkerDataPrep:
 
         _emit_progress(progress_callback, "data_prep_loading_sources", "Loading dataprep sources from upstream APIs.")
         started = time.perf_counter()
-        sources = self.load_sources(sku_ids, week1_dates, progress_callback=progress_callback)
+        sources = self.load_sources(
+            sku_ids,
+            week1_dates,
+            max_trim_percentage=max_trim_percentage,
+            progress_callback=progress_callback,
+        )
         prep_timings["load_sources"] = round(time.perf_counter() - started, 3)
         available_wip_rows = self.scheduling_api.search_available_wip({"plantName": plant_id}) if plant_id else self.scheduling_api.search_available_wip()
         prep_timings["available_wip"] = round(time.perf_counter() - started - prep_timings["load_sources"], 3)
         selected_metrics = self._select_mix_metrics(sources, sku_ids)
-        if not selected_metrics:
+        sku_ids, removed_no_mix_skus = self._filter_skus_with_available_metrics(sku_ids, selected_metrics)
+        if removed_no_mix_skus:
+            monthly_contract = self._filter_monthly_contract_to_skus(monthly_contract, sku_ids)
+            warning_payload = {
+                "code": "skus_omitted_no_mixes",
+                "message": "Omitted requested SKUs that had no mixes to choose from during dataprep.",
+                "omittedSkuIds": removed_no_mix_skus,
+            }
+            warning_messages.append(warning_payload)
+            logger.warning(
+                "Dataprep omitted requested SKUs with no mixes to choose from: %s",
+                ", ".join(removed_no_mix_skus),
+            )
+            _emit_progress(
+                progress_callback,
+                "data_prep_warning",
+                f"Warning: omitting SKU(s) with no mixes to choose from: {', '.join(removed_no_mix_skus)}.",
+                {
+                    **warning_payload,
+                    "keptSkuCount": len(sku_ids),
+                },
+            )
+            selected_metrics = self._select_mix_metrics(sources, sku_ids)
+        if not selected_metrics or not sku_ids:
             if self.use_demo_fallbacks:
                 return self._prepare_demo_inputs(sku_ids, T, week1_dates, M)
             raise ValueError("No mix metrics found for the selected skuIds")
@@ -1405,13 +1577,58 @@ class SchedulingWorkerDataPrep:
         line_of_k = self._build_line_of_k(selected_metrics, mix_line_assignments)
         selected_metrics = self._filter_runnable_metrics(selected_metrics, line_of_k)
         selected_metrics = self._filter_metrics_with_valid_target_buckets(selected_metrics, sources.buckets)
+        trim_filtered_count = 0
+        if max_trim_percentage is not None:
+            metric_count_before_trim = len(selected_metrics)
+            selected_metrics = self._filter_metrics_by_trim(selected_metrics, max_trim_percentage)
+            trim_filtered_count = metric_count_before_trim - len(selected_metrics)
+            if trim_filtered_count:
+                _emit_progress(
+                    progress_callback,
+                    "data_prep_filtering_trim",
+                    "Removing runnable decisions above the configured trim threshold.",
+                    {
+                        "maxTrimPercentage": max_trim_percentage,
+                        "trimFilteredMetricCount": trim_filtered_count,
+                        "remainingMetricCount": len(selected_metrics),
+                    },
+                )
+        sku_ids, removed_unrunnable_skus = self._filter_skus_with_available_metrics(sku_ids, selected_metrics)
+        if removed_unrunnable_skus:
+            monthly_contract = self._filter_monthly_contract_to_skus(monthly_contract, sku_ids)
+            warning_payload = {
+                "code": "skus_omitted_no_runnable_mixes",
+                "message": "Omitted requested SKUs that had no runnable mixes remaining after dataprep filters.",
+                "omittedSkuIds": removed_unrunnable_skus,
+            }
+            warning_messages.append(warning_payload)
+            logger.warning(
+                "Dataprep omitted requested SKUs with no runnable mixes remaining after filters: %s",
+                ", ".join(removed_unrunnable_skus),
+            )
+            _emit_progress(
+                progress_callback,
+                "data_prep_warning",
+                "Warning: omitting SKU(s) with no runnable mixes remaining after dataprep filters: "
+                f"{', '.join(removed_unrunnable_skus)}.",
+                {
+                    **warning_payload,
+                    "keptSkuCount": len(sku_ids),
+                    "remainingMetricCount": len(selected_metrics),
+                },
+            )
+            selected_metrics = self._select_mix_metrics(sources, sku_ids)
+            selected_mix_ids = _normalize_ids(_metric_mix_id(metric) for metric in selected_metrics)
+            selected_mixes = self._select_mixes(sources, selected_mix_ids)
+            line_of_k = self._build_line_of_k(selected_metrics, mix_line_assignments)
         if not selected_metrics:
             if self.use_demo_fallbacks:
                 return self._prepare_demo_inputs(sku_ids, T, week1_dates, M)
             raise ValueError(
                 f"No runnable mix metrics found for skuIds {sku_ids} at plantId '{plant_id}'. "
                 "The selected plant does not have a matching active line for the available mixes, "
-                "or the remaining metrics referenced buckets with invalid targetWeight values."
+                "or the remaining metrics referenced buckets with invalid targetWeight values, "
+                f"or they exceeded the configured trim threshold of {max_trim_percentage}."
             )
 
         selected_mix_ids = _normalize_ids(_metric_mix_id(metric) for metric in selected_metrics)
@@ -1452,6 +1669,7 @@ class SchedulingWorkerDataPrep:
         WIP = {(bucket, day): base_wip_by_bucket.get(bucket, 0.0) for bucket in selected_buckets for day in T}
         bucket_of_k = self._build_bucket_of_k(selected_metrics)
         Y = self._build_yield_map(selected_metrics, sku_ids)
+        decision_output_shares = self._build_decision_output_shares(selected_metrics)
         V = self._build_value_map(selected_metrics)
         R = self._build_rate_map(
             selected_mixes,
@@ -1461,6 +1679,7 @@ class SchedulingWorkerDataPrep:
             sources.configs,
             line_of_k,
         )
+        U = self._build_upgrade_map(selected_metrics)
         base_hours_by_line, H, line_throughput = self._build_hours_and_throughput(selected_lines, T)
         gamma = self._build_gamma(sources.configs)
         prep_timings["assemble_inputs"] = round(time.perf_counter() - overall_started - sum(prep_timings.values()), 3)
@@ -1493,11 +1712,13 @@ class SchedulingWorkerDataPrep:
                 "counts": {
                     "skuCount": len(sku_ids),
                     "metricCount": len(selected_metrics),
+                    "trimFilteredMetricCount": trim_filtered_count,
                     "mixCount": len(selected_mixes),
                     "lineCount": len(selected_lines),
                     "bucketCount": len(selected_buckets),
                     "dayCount": len(T),
                 },
+                "warnings": warning_messages,
             },
         )
 
@@ -1520,6 +1741,7 @@ class SchedulingWorkerDataPrep:
             "D_week1": D_week1,
             "monthly_contract": monthly_contract,
             "Y": Y,
+            "decisionOutputShares": decision_output_shares,
             "V": V,
             "R": R,
             "H": H,
@@ -1528,6 +1750,7 @@ class SchedulingWorkerDataPrep:
             "big_allowed": big_allowed,
             "small_allowed": small_allowed,
             "bird_type": bird_type,
+            "upgrade_pct": U,
             "gamma": gamma,
             "dataPrepTimings": {**sources.api_timings, **prep_timings},
             "dataPrepCounts": {
@@ -1538,6 +1761,7 @@ class SchedulingWorkerDataPrep:
                 "bucketCount": len(selected_buckets),
                 "dayCount": len(T),
             },
+            "dataPrepWarnings": warning_messages,
         }
 
 

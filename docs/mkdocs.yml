@@ -36,6 +36,7 @@ nav:
     - Running the Stack: getting-started/running-the-stack.md
   - Architecture:
     - Overview: architecture/overview.md
+    - API Runtime Diagram: architecture/api-runtime-diagram.md
     - Microservices: architecture/microservices.md
     - Database Design: architecture/database-design.md
     - API Gateway: architecture/api-gateway.md

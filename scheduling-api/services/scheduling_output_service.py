@@ -16,8 +16,12 @@ class SchedulingOutputService:
     def __init__(self, repository: SchedulingOutputRepository):
         self.repository = repository
 
+    @staticmethod
+    def _to_mongo_document(model) -> Dict[str, Any]:
+        return model.model_dump(by_alias=True, mode="json")
+
     def create(self, payload: SchedulingOutputCreate) -> SchedulingOutput:
-        document = SchedulingOutput(**payload.model_dump(by_alias=True)).model_dump(by_alias=True)
+        document = self._to_mongo_document(SchedulingOutput(**payload.model_dump(by_alias=True)))
         try:
             inserted = self.repository.create(document)
         except DuplicateKeyError:
@@ -31,11 +35,11 @@ class SchedulingOutputService:
         return SchedulingOutput(**document)
 
     def search(self, criteria: SchedulingOutputSearchCriteria) -> List[SchedulingOutput]:
-        mongo_criteria: Dict[str, Any] = criteria.model_dump(by_alias=True, exclude_none=True)
+        mongo_criteria: Dict[str, Any] = criteria.model_dump(by_alias=True, exclude_none=True, mode="json")
         return [SchedulingOutput(**doc) for doc in self.repository.search(mongo_criteria)]
 
     def update(self, document_id: str, payload: SchedulingOutputUpdate) -> Optional[SchedulingOutput]:
-        document = SchedulingOutput(_id=document_id, **payload.model_dump(by_alias=True)).model_dump(by_alias=True)
+        document = self._to_mongo_document(SchedulingOutput(_id=document_id, **payload.model_dump(by_alias=True)))
         try:
             updated = self.repository.update(document_id, document)
         except DuplicateKeyError:
@@ -52,7 +56,7 @@ class SchedulingOutputService:
             self.repository.delete_by_dates(clear_dates)
         documents = []
         for item in items:
-            doc = SchedulingOutput(**item.model_dump(by_alias=True)).model_dump(by_alias=True)
+            doc = self._to_mongo_document(SchedulingOutput(**item.model_dump(by_alias=True)))
             doc["_id"] = str(ObjectId())
             documents.append(doc)
         inserted = self.repository.bulk_create(documents)

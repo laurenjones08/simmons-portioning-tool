@@ -6,11 +6,12 @@ import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from config import get_settings
 from database import close_mongo_connection
+from storage import upload_short_term_demand_file
 from routers import job_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -53,7 +54,7 @@ artifacts to the S3-compatible object store.
 | Collection | Purpose |
 |---|---|
 | `scheduling_jobs` | Job lifecycle and progress |
-| `scheduling_results` | Serialized scheduling outputs and artifact metadata |
+| `scheduling_debug_payloads` | Short-lived debug dataprep payloads when explicitly captured |
 """,
     version="1.0.0",
     lifespan=lifespan,
@@ -96,6 +97,18 @@ async def root():
 
 
 app.include_router(job_router.router, prefix="/jobs", tags=["Jobs"])
+
+
+@app.post(
+    "/uploads/short-term-file",
+    tags=["Uploads"],
+    summary="Upload a short-term demand file to object store",
+)
+async def upload_short_term_file_endpoint(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    suffix = os.path.splitext(file.filename or "")[1] or ".csv"
+    object_key = upload_short_term_demand_file(file_bytes, suffix)
+    return {"objectKey": object_key}
 
 
 if __name__ == "__main__":

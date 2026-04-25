@@ -167,10 +167,12 @@ services:
       MONGODB_DATABASE: scheduling_db
       SERVICE_NAME: scheduling-worker-api
       ROOT_PATH: /api/scheduling-worker
+      SCHEDULING_SOLVER: gurobi
       GLOBAL_CONFIG_API_URL: http://api-gateway:80/api/config
       ENUMERATION_API_URL: http://api-gateway:80/api/enumeration
       SCHEDULING_API_URL: http://api-gateway:80/api/scheduling
       DATA_PREP_TIMEOUT_SECONDS: "120"
+      GRB_LICENSE_FILE: /opt/gurobi/gurobi.lic
       OBJECT_STORE_ENDPOINT_URL: http://minio:9000
       OBJECT_STORE_ACCESS_KEY_ID: minioadmin
       OBJECT_STORE_SECRET_ACCESS_KEY: minioadmin
@@ -187,6 +189,7 @@ services:
       - ./scheduling:/app/scheduling
       - ./scheduling-shared:/shared
       - scheduling_uploads:/shared-uploads
+      - ${GUROBI_LICENSE_PATH:-./gurobi.lic}:/opt/gurobi/gurobi.lic:ro
 
     networks:
       - mongo_net

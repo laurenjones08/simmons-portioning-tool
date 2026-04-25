@@ -157,6 +157,7 @@ class MixMetricSearchCriteria(BaseModel):
     mix_id: Optional[str] = Field(None, alias="mixId")
     bucket_id: Optional[str] = Field(None, alias="bucketId")
     sku_trade_number: Optional[str] = Field(None, alias="skuTradeNumber", min_length=1)
+    max_trim_percentage: Optional[float] = Field(None, alias="maxTrimPercentage", ge=0.0, le=100.0)
 
     model_config = {
         "populate_by_name": True,

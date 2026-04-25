@@ -179,6 +179,43 @@ def build_upcoming_cuts(line_schedule: pd.DataFrame, focus_date: pd.Timestamp, d
     return upcoming.sort_values(["_parsed_date", "line"]).drop(columns=["_parsed_date"]).reset_index(drop=True)
 
 
+def build_upcoming_batches(decisions: pd.DataFrame, focus_date: pd.Timestamp, days: int = 3) -> pd.DataFrame:
+    if decisions.empty or "date" not in decisions.columns:
+        return pd.DataFrame(columns=["date", "line", "mixId", "lbsProduced", "duration"])
+
+    df = _with_parsed_date(decisions, "date")
+    df = df[(df["_parsed_date"] > focus_date) & (df["_parsed_date"] <= focus_date + timedelta(days=days))]
+    if df.empty:
+        return pd.DataFrame(columns=["date", "line", "mixId", "lbsProduced", "duration"])
+
+    if "lineId" in df.columns and "line" not in df.columns:
+        df = df.rename(columns={"lineId": "line"})
+    if "line" not in df.columns:
+        df["line"] = ""
+    if "mixId" not in df.columns:
+        df["mixId"] = ""
+    if "lbsProduced" not in df.columns:
+        df["lbsProduced"] = 0.0
+    if "duration" not in df.columns:
+        df["duration"] = 0.0
+
+    preferred_columns = [
+        "date",
+        "line",
+        "mixId",
+        "skuId",
+        "bucket",
+        "lbsProduced",
+        "duration",
+        "upgradePercentage",
+        "trimPercentage",
+    ]
+    available_columns = [column for column in preferred_columns if column in df.columns]
+    upcoming = df.sort_values(["_parsed_date", "line", "mixId"]).drop(columns=["_parsed_date"])
+    upcoming["date"] = pd.to_datetime(upcoming["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return upcoming[available_columns].reset_index(drop=True)
+
+
 def build_demand_progress(outputs: pd.DataFrame, sku_demands: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     if outputs.empty or "date" not in outputs.columns:
         return pd.DataFrame(columns=["date", "produced_lbs", "demand_lbs", "coverage_pct", "gap_lbs"])
@@ -243,7 +280,23 @@ def build_bucket_usage_summary(bucket_usage: pd.DataFrame, start: pd.Timestamp, 
     window = filter_date_range(bucket_usage, "date", start, end)
     if window.empty:
         return pd.DataFrame(columns=["bucket", "used_lbs", "available_lbs", "remaining_lbs", "util_pct"])
-    source_used = "usedLbs" if "usedLbs" in window.columns else "used_lbs" if "used_lbs" in window.columns else None
+
+    bucket_column = "bucket" if "bucket" in window.columns else "bucketId" if "bucketId" in window.columns else None
+    if bucket_column is None:
+        return pd.DataFrame(columns=["bucket", "used_lbs", "available_lbs", "remaining_lbs", "util_pct"])
+    if bucket_column != "bucket":
+        window = window.copy()
+        window["bucket"] = window[bucket_column]
+
+    source_used = (
+        "usedLbs"
+        if "usedLbs" in window.columns
+        else "utilizedLbs"
+        if "utilizedLbs" in window.columns
+        else "used_lbs"
+        if "used_lbs" in window.columns
+        else None
+    )
     source_available = "availableLbs" if "availableLbs" in window.columns else "available_lbs" if "available_lbs" in window.columns else None
     source_util = "utilPct" if "utilPct" in window.columns else "util_pct" if "util_pct" in window.columns else None
 

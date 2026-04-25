@@ -41,6 +41,7 @@ class CreateJobRequest(BaseModel):
     debug_mode: bool = Field(default=False, alias="debugMode")
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays", ge=1)
+    max_trim_percentage: float = Field(default=25.0, alias="maxTrimPercentage", ge=0.0, le=100.0)
 
     model_config = {
         "populate_by_name": True,
@@ -56,6 +57,7 @@ class CreateJobRequest(BaseModel):
                 "debugMode": False,
                 "planStartDate": "2026-01-05",
                 "horizonDays": 12,
+                "maxTrimPercentage": 25.0,
             }
         },
     }
@@ -76,6 +78,7 @@ class SchedulingJob(BaseModel):
     debug_mode: bool = Field(default=False, alias="debugMode")
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays")
+    max_trim_percentage: float = Field(default=25.0, alias="maxTrimPercentage")
     current_stage: Optional[str] = Field(default=None, alias="currentStage")
     stage_message: Optional[str] = Field(default=None, alias="stageMessage")
     stage_details: Dict[str, Any] = Field(default_factory=dict, alias="stageDetails")
@@ -83,7 +86,7 @@ class SchedulingJob(BaseModel):
     timings: Dict[str, float] = Field(default_factory=dict, alias="timings")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
     error_traceback: Optional[str] = Field(default=None, alias="errorTraceback")
-    results_collection: str = Field(default="scheduling_results", alias="resultsCollection")
+    results_collection: Optional[str] = Field(default=None, alias="resultsCollection")
     plant_id: str = Field(..., alias="plantId")
     sku_ids: List[str] = Field(default_factory=list, alias="skuIds")
     artifact_bucket: Optional[str] = Field(default=None, alias="artifactBucket")
@@ -111,6 +114,7 @@ class JobStatusResponse(BaseModel):
     debug_mode: bool = Field(default=False, alias="debugMode")
     plan_start_date: str = Field(default="2026-01-05", alias="planStartDate")
     horizon_days: int = Field(default=12, alias="horizonDays")
+    max_trim_percentage: float = Field(default=25.0, alias="maxTrimPercentage")
     current_stage: Optional[str] = Field(default=None, alias="currentStage")
     stage_message: Optional[str] = Field(default=None, alias="stageMessage")
     stage_details: Dict[str, Any] = Field(default_factory=dict, alias="stageDetails")
@@ -118,7 +122,7 @@ class JobStatusResponse(BaseModel):
     timings: Dict[str, float] = Field(default_factory=dict, alias="timings")
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
     error_traceback: Optional[str] = Field(default=None, alias="errorTraceback")
-    results_collection: str = Field(default="scheduling_results", alias="resultsCollection")
+    results_collection: Optional[str] = Field(default=None, alias="resultsCollection")
     plant_id: str = Field(..., alias="plantId")
     sku_ids: List[str] = Field(default_factory=list, alias="skuIds")
     artifact_bucket: Optional[str] = Field(default=None, alias="artifactBucket")
@@ -145,6 +149,7 @@ class JobStatusResponse(BaseModel):
             debugMode=job.debug_mode,
             planStartDate=job.plan_start_date,
             horizonDays=job.horizon_days,
+            maxTrimPercentage=job.max_trim_percentage,
             currentStage=job.current_stage,
             stageMessage=job.stage_message,
             stageDetails=job.stage_details,

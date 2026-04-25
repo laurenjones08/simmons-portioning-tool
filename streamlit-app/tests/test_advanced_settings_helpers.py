@@ -6,6 +6,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from views.advanced_settings import (  # noqa: E402
+    _available_wip_payload,
+    _available_wip_rows,
     _format_list_value,
     _format_cut_strategy_label,
     _parse_bool,
@@ -64,3 +66,40 @@ def test_strategy_options_are_filtered_by_line_type():
     ids, labels = _strategy_options_for_line(strategies, "DSI884")
     assert ids == ["b"]
     assert labels == {"b": "Two - DSI884 [R]"}
+
+
+def test_available_wip_rows_normalize_api_documents():
+    rows = _available_wip_rows(
+        [
+            {
+                "_id": "wip-1",
+                "plantName": "FSP",
+                "bucketId": "bucket-1",
+                "availableLbs": 1250.0,
+            }
+        ]
+    )
+    assert rows == [
+        {
+            "availableWipId": "wip-1",
+            "plantName": "FSP",
+            "bucketId": "bucket-1",
+            "availableLbs": 1250.0,
+        }
+    ]
+
+
+def test_available_wip_payload_validates_and_trims_values():
+    payload = _available_wip_payload(
+        {
+            "plantName": " FSP ",
+            "bucketId": " bucket-1 ",
+            "availableLbs": "42.5",
+        },
+        {},
+    )
+    assert payload == {
+        "plantName": "FSP",
+        "bucketId": "bucket-1",
+        "availableLbs": 42.5,
+    }

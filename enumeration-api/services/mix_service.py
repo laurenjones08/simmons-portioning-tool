@@ -91,6 +91,15 @@ class MixService:
             value = normalized.get(key)
             if isinstance(value, ObjectId):
                 normalized[key] = str(value)
+        bird_size = normalized.get("reqBirdSize")
+        if isinstance(bird_size, str):
+            cleaned_bird_size = bird_size.strip().upper()
+            if cleaned_bird_size == "SB/BB":
+                # Legacy mixes stored a combined small/big-bird marker. Treat it
+                # as the generic bird-size bucket used elsewhere in the API.
+                normalized["reqBirdSize"] = "ALL"
+            elif cleaned_bird_size:
+                normalized["reqBirdSize"] = cleaned_bird_size
         return normalized
 
     @classmethod

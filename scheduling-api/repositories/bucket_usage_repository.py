@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 from pymongo.collection import Collection
 from pymongo.database import Database
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
 
 
 class BucketUsageRepository:
@@ -69,7 +69,9 @@ class BucketUsageRepository:
                 doc["_id"] = str(ObjectId())
         try:
             self.collection.insert_many(documents, ordered=False)
-        except Exception:
-            pass
+        except BulkWriteError as exc:
+            raise Exception(f"Database error bulk creating bucket usage rows: {exc.details}")
+        except PyMongoError as exc:
+            raise Exception(f"Database error bulk creating bucket usage rows: {exc}")
         return documents
 

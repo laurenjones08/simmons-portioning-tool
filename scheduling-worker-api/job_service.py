@@ -174,6 +174,29 @@ def _get_week1_demand(inputs: Dict[str, Any], p: str, t: Any) -> float:
     return float(val or 0.0)
 
 
+def _get_month_of_day(inputs: Dict[str, Any], t: Any) -> Any:
+    month_of_day = inputs.get("month_of_day", {})
+    return month_of_day.get(t, month_of_day.get(str(t)))
+
+
+def _get_long_term_contract(inputs: Dict[str, Any], p: str, t: Any) -> float:
+    monthly_contract = inputs.get("monthly_contract", {})
+    month = _get_month_of_day(inputs, t)
+    if month is None:
+        return 0.0
+    val = monthly_contract.get(
+        (p, month),
+        monthly_contract.get(
+            (str(p), month),
+            monthly_contract.get(
+                (p, str(month)),
+                monthly_contract.get((str(p), str(month)), 0.0),
+            ),
+        ),
+    )
+    return float(val or 0.0)
+
+
 def _persist_results_to_scheduling_api(results: Dict[str, Any], request: "CreateJobRequest") -> Dict[str, Any]:
     endpoints = ApiEndpoints()
     client = SchedulingApiClient(endpoints.scheduling_api_url, endpoints.timeout_seconds)
@@ -183,6 +206,7 @@ def _persist_results_to_scheduling_api(results: Dict[str, Any], request: "Create
 
     decision_df = outputs.get("x_long_nonzero")
     bucket_df = outputs.get("bucket_usage_by_date")
+    decision_output_shares = inputs.get("decisionOutputShares", {})
 
     summary: Dict[str, Any] = {}
 
@@ -201,12 +225,14 @@ def _persist_results_to_scheduling_api(results: Dict[str, Any], request: "Create
             assigned_lbs = float(row["assigned_lbs"])
             rate = _get_rate(inputs, k)
             duration = round(assigned_lbs / rate, 4) if rate > 0 else 0.0
+            upgrade_pct = float(row.get("upgrade_pct", 0.0) or 0.0)
             decision_items.append({
                 "mixId": k,
                 "lineId": str(row["line"]),
                 "date": date_str,
                 "lbsProduced": assigned_lbs,
                 "duration": duration,
+                "upgradePct": upgrade_pct,
             })
 
         decision_result = client.bulk_create_decisions({
@@ -229,21 +255,47 @@ def _persist_results_to_scheduling_api(results: Dict[str, Any], request: "Create
             k = str(row["decision"])
             date_str = str(row["date"])
             assigned_lbs = float(row["assigned_lbs"])
+            batch_upgrade_pct = float(row.get("upgrade_pct", 0.0) or 0.0)
             decision_id = decision_id_map.get((k, str(row["line"]), date_str), "")
             if not decision_id:
                 continue
+
+            output_shares = decision_output_shares.get(k, [])
+            if output_shares:
+                for share in output_shares:
+                    sku_id = str(share.get("skuId", "")).strip()
+                    yield_fraction = float(share.get("yieldFraction", 0.0) or 0.0)
+                    if not sku_id or yield_fraction <= 0:
+                        continue
+                    lbs_produced = round(assigned_lbs * yield_fraction, 3)
+                    short_term_contract_lbs = round(_get_week1_demand(inputs, sku_id, row["date"]), 3)
+                    long_term_contract_lbs = round(_get_long_term_contract(inputs, sku_id, row["date"]), 3)
+                    output_items.append({
+                        "decisionId": decision_id,
+                        "skuId": sku_id,
+                        "date": date_str,
+                        "batchUpgradePct": batch_upgrade_pct,
+                        "lbsProduced": lbs_produced,
+                        "shortTermContractLbs": short_term_contract_lbs,
+                        "longTermContractLbs": long_term_contract_lbs,
+                    })
+                continue
+
             for p in P_set:
                 y = _get_yield(inputs, str(p), k)
                 if y <= 0:
                     continue
                 lbs_produced = round(assigned_lbs * y, 3)
-                contract_lbs = round(_get_week1_demand(inputs, str(p), row["date"]), 3)
+                short_term_contract_lbs = round(_get_week1_demand(inputs, str(p), row["date"]), 3)
+                long_term_contract_lbs = round(_get_long_term_contract(inputs, str(p), row["date"]), 3)
                 output_items.append({
                     "decisionId": decision_id,
                     "skuId": str(p),
-                    "lbsProduced": lbs_produced,
-                    "contractLbs": contract_lbs,
                     "date": date_str,
+                    "batchUpgradePct": batch_upgrade_pct,
+                    "lbsProduced": lbs_produced,
+                    "shortTermContractLbs": short_term_contract_lbs,
+                    "longTermContractLbs": long_term_contract_lbs,
                 })
 
         output_result = client.bulk_create_outputs({
@@ -305,20 +357,12 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
 
     def progress_callback(stage: str, message: Optional[str] = None, details: Optional[Dict[str, Any]] = None) -> None:
         detail_payload = dict(details or {})
-        debug_data_prep = detail_payload.pop("debugDataPrep", None)
         timings = detail_payload.pop("timings", None)
         if timings is not None:
             normalized_timings = {str(key): float(value) for key, value in dict(timings).items()}
             normalized_timings["job_elapsed"] = round(time.perf_counter() - job_started, 3)
         else:
             normalized_timings = {"job_elapsed": round(time.perf_counter() - job_started, 3)}
-        if debug_data_prep is not None:
-            repo.store_debug_dump(
-                job_id,
-                request.run_id,
-                {"debugDataPrep": _make_json_safe(debug_data_prep)},
-                ttl_minutes=5,
-            )
         repo.update_progress(
             job_id,
             current_stage=stage,
@@ -373,18 +417,6 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
             ]
             logger.info("Uploaded scheduling CSV artifacts to bucket=%s prefix=%s", artifact_bucket, artifact_prefix)
 
-        output_payload = cast(Dict[str, Any], {})
-        for name, df in results.get("outputs", {}).items():
-            output_payload[name] = _serialize_dataframe(df)
-
-        inputs_payload: Dict[str, Any] = {}
-        inputs_payload["planStartDate"] = request.plan_start_date
-        inputs_payload["horizonDays"] = request.horizon_days
-        inputs_payload["shortTermFile"] = request.short_term_file
-        inputs_payload["plantId"] = request.plant_id
-        inputs_payload["skuIds"] = request.sku_ids
-        inputs_payload["debugMode"] = request.debug_mode
-
         artifact_payload: Dict[str, Any] = {}
         artifact_payload["bucket"] = artifact_bucket
         artifact_payload["prefix"] = artifact_prefix
@@ -392,16 +424,10 @@ def _run_job_thread(db: Database, job_id: str, request: CreateJobRequest) -> Non
         artifact_payload["files"] = artifact_files
         artifact_payload["savedCsv"] = request.save_csv
         artifact_payload["timings"] = results.get("timings", {})
-        output_payload["inputs"] = inputs_payload  # type: ignore[assignment]
-        output_payload["artifacts"] = artifact_payload  # type: ignore[assignment]
-        repo.store_results(job_id, request.run_id, output_payload)
 
         progress_callback("persist_results", "Persisting results to scheduling API.")
-        try:
-            persist_summary = _persist_results_to_scheduling_api(results, request)
-            logger.info("Persisted scheduling results for job %s: %s", job_id, persist_summary)
-        except Exception as persist_exc:
-            logger.warning("Failed to persist results to scheduling API for job %s: %s", job_id, persist_exc)
+        persist_summary = _persist_results_to_scheduling_api(results, request)
+        logger.info("Persisted scheduling results for job %s: %s", job_id, persist_summary)
 
         doc = repo.get_by_id(job_id)
         if doc and doc.get("status") not in ("cancelled", "failed"):
@@ -477,6 +503,7 @@ class JobService:
                 "debugMode": request.debug_mode,
                 "planStartDate": request.plan_start_date,
                 "horizonDays": request.horizon_days,
+                "maxTrimPercentage": request.max_trim_percentage,
                 "currentStage": "pending",
                 "stageMessage": "Scheduling job is queued.",
                 "stageDetails": {},
@@ -486,7 +513,7 @@ class JobService:
                 "skuIds": sku_ids,
                 "errorMessage": None,
                 "errorTraceback": None,
-                "resultsCollection": "scheduling_results",
+                "resultsCollection": None,
                 "artifactBucket": None,
                 "artifactPrefix": None,
                 "artifactKeys": [],
@@ -529,17 +556,6 @@ class JobService:
             return None
         return self._doc_to_response(doc).artifact_files
 
-    def get_results(self, job_id: str) -> Optional[Dict[str, Any]]:
-        doc = self.repo.get_results(job_id)
-        if doc is None:
-            return None
-        return {
-            "jobId": doc.get("jobId"),
-            "runId": doc.get("runId"),
-            "createdAt": doc.get("createdAt"),
-            "outputs": doc.get("outputs", {}),
-        }
-
     def get_debug_dump(self, job_id: str) -> Optional[Dict[str, Any]]:
         doc = self.repo.get_debug_dump(job_id)
         if doc is None:
@@ -578,6 +594,7 @@ class JobService:
             debugMode=doc.get("debugMode", False),
             planStartDate=doc.get("planStartDate", "2026-01-05"),
             horizonDays=doc.get("horizonDays", 12),
+            maxTrimPercentage=doc.get("maxTrimPercentage", 25.0),
             currentStage=doc.get("currentStage"),
             stageMessage=doc.get("stageMessage"),
             stageDetails=doc.get("stageDetails", {}),
@@ -587,7 +604,7 @@ class JobService:
             skuIds=doc.get("skuIds", []),
             errorMessage=doc.get("errorMessage"),
             errorTraceback=doc.get("errorTraceback"),
-            resultsCollection=doc.get("resultsCollection", "scheduling_results"),
+            resultsCollection=doc.get("resultsCollection"),
             artifactBucket=doc.get("artifactBucket"),
             artifactPrefix=doc.get("artifactPrefix"),
             artifactKeys=doc.get("artifactKeys", []),

@@ -211,6 +211,107 @@ def test_prepare_removes_zero_monthly_contract_skus_before_metric_selection():
     assert ("SKU-2", "mix-1:bucket-2") not in inputs["Y"]
 
 
+def test_prepare_omits_skus_with_no_available_mixes_and_emits_warning():
+    progress_events = []
+
+    class NoMixPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    assert criteria == {"plantName": "FSP"}
+                    return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-1",
+                            "friendlyName": "Line 1",
+                            "lineType": "DSI888",
+                            "plant": "FSP",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "unitsAvailable": 2,
+                            "lineThroughput": 9000.0,
+                            "isActive": True,
+                        }
+                    ]
+
+                def list_configs(self):
+                    return [{"key": "scheduling.gamma_value", "value": 0.25}]
+
+            class FakeEnumerationApi:
+                def list_skus(self):
+                    return [
+                        {"tradeNumber": "SKU-1", "birdSize": "SB"},
+                        {"tradeNumber": "SKU-2", "birdSize": "SB"},
+                    ]
+
+                def list_mixes(self):
+                    return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
+
+                def list_buckets(self):
+                    return [{"_id": "bucket-1", "minWeight": 95.0, "targetWeight": 100.0, "maxWeight": 105.0}]
+
+                def list_cut_strategies(self):
+                    return []
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    assert sku_trade_numbers == ["SKU-1", "SKU-2"]
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "upgradePercentage": 50.0,
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        }
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+        def _build_monthly_contract(self, sku_ids, months):
+            return {
+                ("SKU-1", months[0]): 500.0,
+                ("SKU-2", months[0]): 500.0,
+            }
+
+    prep = NoMixPrep(use_demo_fallbacks=False)
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1", "SKU-2"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        },
+        progress_callback=lambda stage, message, details: progress_events.append((stage, message, details)),
+    )
+
+    assert inputs["P"] == ["SKU-1"]
+    assert list(inputs["monthly_contract"].keys()) == [("SKU-1", pd.Period("2026-01", freq="M"))]
+    assert inputs["dataPrepWarnings"] == [
+        {
+            "code": "skus_omitted_no_mixes",
+            "message": "Omitted requested SKUs that had no mixes to choose from during dataprep.",
+            "omittedSkuIds": ["SKU-2"],
+        }
+    ]
+
+    warning_events = [event for event in progress_events if event[0] == "data_prep_warning"]
+    assert len(warning_events) == 1
+    _, warning_message, warning_details = warning_events[0]
+    assert "SKU-2" in warning_message
+    assert warning_details["omittedSkuIds"] == ["SKU-2"]
+
+    final_events = [event for event in progress_events if event[0] == "data_prep_complete"]
+    assert final_events
+    assert final_events[-1][2]["warnings"] == inputs["dataPrepWarnings"]
+
+
 def test_prepare_prorates_monthly_contracts_for_partial_horizon_months():
     class PartialMonthPrep(StubPrep):
         def _build_monthly_contract(self, sku_ids, months):
@@ -293,6 +394,132 @@ def test_filter_metrics_with_valid_target_buckets_drops_invalid_bucket_rows():
     selected = prep._filter_metrics_with_valid_target_buckets(metrics, buckets)
 
     assert [metric["_id"] for metric in selected] == ["mix-1:bucket-good"]
+
+
+def test_filter_metrics_by_trim_drops_metrics_above_configured_threshold():
+    class FilterPrep(SchedulingWorkerDataPrep):
+        def __post_init__(self):
+            return None
+
+    prep = FilterPrep(use_demo_fallbacks=False)
+    metrics = [
+        {"_id": "mix-1:bucket-low", "trimPercentage": 9.5},
+        {"_id": "mix-1:bucket-edge", "trimPercentage": 12.0},
+        {"_id": "mix-1:bucket-high", "trimPercentage": 12.1},
+        {"_id": "mix-1:bucket-missing"},
+    ]
+
+    selected = prep._filter_metrics_by_trim(metrics, 12.0)
+
+    assert [metric["_id"] for metric in selected] == [
+        "mix-1:bucket-low",
+        "mix-1:bucket-edge",
+        "mix-1:bucket-missing",
+    ]
+
+
+def test_prepare_defaults_max_trim_percentage_per_job():
+    prep = StubPrep(use_demo_fallbacks=False)
+
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+        }
+    )
+
+    assert inputs["K"] == ["mix-1:bucket-1"]
+
+
+def test_prepare_uses_job_level_max_trim_percentage():
+    class TrimPrep(StubPrep):
+        def __post_init__(self):
+            class FakeSchedulingApi:
+                def search_available_wip(self, criteria=None):
+                    return [{"bucketId": "bucket-1", "plantName": "FSP", "availableLbs": 999.0}]
+
+            class FakeConfigApi:
+                def list_lines(self):
+                    return [
+                        {
+                            "lineId": "line-1",
+                            "friendlyName": "Line 1",
+                            "lineType": "DSI888",
+                            "plant": "FSP",
+                            "hoursOfLaborAvailablePerShift": 7.5,
+                            "unitsAvailable": 2,
+                            "lineThroughput": 9000.0,
+                            "isActive": True,
+                        }
+                    ]
+
+                def list_configs(self):
+                    return [
+                        {"key": "scheduling.gamma_value", "value": 0.25},
+                        {"key": "enumeration.upgradeDistributionMu", "value": 100.0},
+                        {"key": "enumeration.upgradeDistributionSigma", "value": 1.0},
+                    ]
+
+            class FakeEnumerationApi:
+                def list_skus(self):
+                    return [{"tradeNumber": "SKU-1", "birdSize": "SB"}]
+
+                def list_mixes(self):
+                    return [{"_id": "mix-1", "mfgType": "DSI888", "reqPlant": "FSP", "reqBirdSize": "SB", "beltSpeed": 11.0}]
+
+                def list_buckets(self):
+                    return [{"_id": "bucket-1", "minWeight": 95.0, "targetWeight": 100.0, "maxWeight": 105.0}]
+
+                def list_cut_strategies(self):
+                    return []
+
+                def list_mix_metrics(self, sku_trade_numbers=None):
+                    return [
+                        {
+                            "_id": "mix-1:bucket-1",
+                            "mixId": "mix-1",
+                            "bucketId": "bucket-1",
+                            "trimPercentage": 30.0,
+                            "upgradePercentage": 50.0,
+                            "value": 4.2,
+                            "unitPlan": [{"sku": "SKU-1", "pctOfTotal": 100.0, "totalWeightInPlan": 1.0}],
+                            "skuKeys": ["SKU-1"],
+                        }
+                    ]
+
+            self.scheduling_api = FakeSchedulingApi()
+            self.config_api = FakeConfigApi()
+            self.enumeration_api = FakeEnumerationApi()
+            return None
+
+    prep = TrimPrep(use_demo_fallbacks=False)
+
+    try:
+        prep.prepare(
+            job={
+                "plantId": "FSP",
+                "skuIds": ["SKU-1"],
+                "planStartDate": "2026-01-05",
+                "horizonDays": 12,
+            }
+        )
+        raise AssertionError("Expected trim threshold to remove the only metric")
+    except ValueError as exc:
+        assert "trim threshold of 25.0" in str(exc)
+
+    inputs = prep.prepare(
+        job={
+            "plantId": "FSP",
+            "skuIds": ["SKU-1"],
+            "planStartDate": "2026-01-05",
+            "horizonDays": 12,
+            "maxTrimPercentage": 35.0,
+        }
+    )
+
+    assert inputs["K"] == ["mix-1:bucket-1"]
 
 
 def test_prepare_assigns_line_by_mix_mfg_type(monkeypatch):

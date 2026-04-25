@@ -13,6 +13,7 @@ class SchedulingDecisionBase(BaseModel):
     decision_date: date = Field(..., alias="date")
     duration: float = Field(..., alias="duration", gt=0.0)
     lbs_produced: float = Field(..., alias="lbsProduced", ge=0.0)
+    upgrade_pct: float = Field(..., alias="upgradePct", ge=0.0)
 
     model_config = {"populate_by_name": True}
 
@@ -38,6 +39,7 @@ class SchedulingDecision(SchedulingDecisionBase):
                 "date": "2026-04-15",
                 "duration": 6.5,
                 "lbsProduced": 2400.0,
+                "upgradePct": 0.0875,
             }
         },
     }

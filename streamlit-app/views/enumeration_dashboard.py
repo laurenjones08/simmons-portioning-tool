@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from statistics import mean
-import time
+from urllib.parse import urlencode
 
 import pandas as pd
 import streamlit as st
@@ -55,11 +55,27 @@ def _load_all_buckets():
         return []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_all_skus():
+    try:
+        return search_skus({})
+    except Exception:
+        return []
+
+
 def _clear_results_cache():
     _load_all_mixes.clear()
     _load_all_metrics.clear()
     _load_cut_strategies.clear()
     _load_all_buckets.clear()
+    _load_all_skus.clear()
+    for key in (
+        "enum_cached_metrics_by_mix",
+        "enum_cached_bucket_labels",
+        "enum_cached_mixes_df",
+        "enum_cached_sku_analytics_df",
+    ):
+        st.session_state.pop(key, None)
 
 
 def _status_badge(status: str) -> str:
@@ -119,6 +135,28 @@ def _metrics_by_mix(all_metrics: list[dict]) -> dict[str, list[dict]]:
     return metrics
 
 
+def _cached_bucket_label_map(all_buckets: list[dict]) -> dict[str, str]:
+    cache_key = ("bucket_labels", len(all_buckets))
+    cached = st.session_state.get("enum_cached_bucket_labels")
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key:
+        return cached[1]
+
+    labels = _bucket_label_map(all_buckets)
+    st.session_state["enum_cached_bucket_labels"] = (cache_key, labels)
+    return labels
+
+
+def _cached_metrics_by_mix(all_metrics: list[dict]) -> dict[str, list[dict]]:
+    cache_key = ("metrics_by_mix", len(all_metrics))
+    cached = st.session_state.get("enum_cached_metrics_by_mix")
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key:
+        return cached[1]
+
+    metrics = _metrics_by_mix(all_metrics)
+    st.session_state["enum_cached_metrics_by_mix"] = (cache_key, metrics)
+    return metrics
+
+
 def _bucket_metric(metrics: list[dict], bucket_id: str | None) -> dict | None:
     if not bucket_id:
         return None
@@ -154,17 +192,389 @@ def _mix_flag_labels(mix: dict | None) -> list[str]:
 def _consume_mix_selection(
     current_selection: str | None,
     previous_selection: str | None,
-) -> tuple[str | None, str | None, bool]:
+) -> tuple[str | None, str | None]:
     next_selection = current_selection
     if current_selection and current_selection != previous_selection:
-        return next_selection, current_selection, True
-    return next_selection, None, False
+        return next_selection, current_selection
+    return next_selection, None
 
 
 def _dismiss_mix_detail_modal() -> None:
     st.session_state["enum_mix_detail_open_id"] = None
-    st.session_state["enum_mix_detail_loading"] = False
     st.session_state["enum_mix_table_selection"] = None
+    st.session_state["enum_mix_detail_bucket_id"] = None
+    st.session_state["enum_mix_detail_bucket_mix_id"] = None
+    try:
+        if st.query_params.get("mixId"):
+            del st.query_params["mixId"]
+    except Exception:
+        pass
+
+
+def _consume_job_progress_selection(
+    current_selection: str | None,
+    previous_selection: str | None,
+) -> tuple[str | None, str | None]:
+    next_selection = current_selection
+    if current_selection and current_selection != previous_selection:
+        return next_selection, current_selection
+    return next_selection, None
+
+
+def _dismiss_job_progress_modal() -> None:
+    st.session_state["enum_job_progress_open_id"] = None
+    st.session_state["enum_job_table_selection"] = None
+
+
+def _job_progress_summary(job: dict) -> dict[str, float | int]:
+    stages = [stage for stage in job.get("stages", []) if isinstance(stage, dict)]
+    processed = sum(int(stage.get("processedCombinations", 0) or 0) for stage in stages)
+    total = sum(int(stage.get("totalCombinations", 0) or 0) for stage in stages)
+    completed = sum(1 for stage in stages if stage.get("status") == "completed")
+    running = sum(1 for stage in stages if stage.get("status") == "running")
+    pending = sum(1 for stage in stages if stage.get("status") == "pending")
+    progress = (processed / total) if total else 0.0
+    return {
+        "processed": processed,
+        "total": total,
+        "completed": completed,
+        "running": running,
+        "pending": pending,
+        "progress": progress,
+    }
+
+
+def _default_mix_detail_bucket_id(mix_metrics: list[dict]) -> str | None:
+    if not mix_metrics:
+        return None
+    best_metric = max(mix_metrics, key=lambda item: item.get("upgradePercentage") or 0)
+    bucket_id = str(best_metric.get("bucketId", "")).strip()
+    return bucket_id or None
+
+
+def _consume_sku_mix_selection(
+    current_selection: str | None,
+    previous_selection: str | None,
+) -> tuple[str | None, str | None]:
+    next_selection = current_selection
+    if current_selection and current_selection != previous_selection:
+        return next_selection, current_selection
+    return next_selection, None
+
+
+def _dismiss_sku_mix_modal() -> None:
+    st.session_state["enum_sku_mix_open_sku"] = None
+    st.session_state["enum_sku_mix_selection"] = None
+    st.session_state["enum_sku_mix_selected_mix_id"] = None
+    st.session_state["enum_mix_detail_bucket_id"] = None
+    st.session_state["enum_mix_detail_bucket_mix_id"] = None
+
+
+def _activate_dialog_state(active_key: str, active_value: str | None, *other_keys: str) -> None:
+    st.session_state[active_key] = active_value
+    for key in other_keys:
+        st.session_state[key] = None
+
+
+def _clear_all_dialog_states() -> None:
+    for key in ("enum_mix_detail_open_id", "enum_job_progress_open_id", "enum_sku_mix_open_sku"):
+        st.session_state[key] = None
+
+
+def _mix_detail_href(mix_id: str) -> str:
+    return f"?{urlencode({'page': 'Enumeration Dashboard', 'mixId': mix_id})}"
+
+
+def _scheduling_create_href(mix: dict) -> str:
+    sku_ids = sorted(str(sku_id).strip() for sku_id in mix.get("skus", {}).keys() if str(sku_id).strip())
+    params = {
+        "page": "Scheduling Create",
+        "plantId": str(mix.get("reqPlant", "")).strip(),
+        "skuIds": ",".join(sku_ids),
+    }
+    return f"?{urlencode(params)}"
+
+
+def _mixes_for_sku(
+    sku_trade: str,
+    all_mixes: list[dict],
+    metrics_by_mix: dict[str, list[dict]],
+    all_strategies: dict[str, dict],
+    bucket_labels: dict[str, str],
+    selected_bucket_id: str | None,
+) -> pd.DataFrame:
+    rows = []
+    for mix in all_mixes:
+        if sku_trade not in {str(key).strip() for key in mix.get("skus", {}).keys()}:
+            continue
+
+        mix_id = str(mix.get("_id", ""))
+        strategy = all_strategies.get(mix.get("cutStrategyID", ""), {})
+        mix_metrics = metrics_by_mix.get(mix_id, [])
+        if selected_bucket_id:
+            mix_metrics = [metric for metric in mix_metrics if str(metric.get("bucketId", "")) == selected_bucket_id]
+
+        mix_summary = _mix_score(mix_metrics)
+        best_metric = max(mix_metrics, key=lambda item: item.get("upgradePercentage") or 0) if mix_metrics else None
+
+        rows.append(
+            {
+                "Mix ID": mix_id,
+                "SKUs": _fmt_skus(mix.get("skus", {})),
+                "Line": mix.get("mfgType") or strategy.get("lineType", "—"),
+                "Parts": ", ".join(strategy.get("parts", [])) or "—",
+                "Plant": mix.get("reqPlant", "—"),
+                "Bird Size": mix.get("reqBirdSize", "—"),
+                "Usable Buckets": len(mix_metrics),
+                "Best Bucket": bucket_labels.get(str(best_metric.get("bucketId", "")), "—") if best_metric else "—",
+                "Best Upgrade %": mix_summary["best_upgrade"],
+                "Avg Upgrade %": mix_summary["avg_upgrade"],
+                "Avg Trim %": mix_summary["avg_trim"],
+                "Open Mix": _mix_detail_href(mix_id),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["Best Upgrade %", "Usable Buckets"], ascending=[False, False], na_position="last")
+    return df
+
+
+def _render_job_progress_body(job: dict) -> None:
+    summary = _job_progress_summary(job)
+    stages = [stage for stage in job.get("stages", []) if isinstance(stage, dict)]
+    status = str(job.get("status", "pending")).lower()
+
+    st.caption("Track stage-by-stage combination processing for the selected enumeration job.")
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Status", status.upper())
+    k2.metric("Processed", f"{summary['processed']:,}")
+    k3.metric("Total Combos", f"{summary['total']:,}" if summary["total"] else "---")
+    k4.metric("Stages Done", f"{summary['completed']}/{max(len(stages), 1)}")
+
+    if summary["total"]:
+        st.progress(float(summary["progress"]))
+        st.caption(f"Overall progress: {summary['progress'] * 100:.1f}%")
+    elif status in {"pending", "running"}:
+        st.info("This job has been submitted, but stage totals are not available yet.")
+
+    meta_left, meta_right = st.columns(2)
+    with meta_left:
+        st.markdown(
+            f"<div class='simmons-card'>"
+            f"<div><strong>Run ID:</strong> {job.get('runId', '---')}</div>"
+            f"<div><strong>Job ID:</strong> <code>{job.get('jobId') or job.get('_id', '---')}</code></div>"
+            f"<div><strong>Scope:</strong> Plant {job.get('plantFilter') or 'all'} | Bird {job.get('birdSizeFilter') or 'all'}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with meta_right:
+        st.markdown(
+            f"<div class='simmons-card'>"
+            f"<div><strong>Submitted:</strong> {_fmt_dt(job.get('createdAt', ''))}</div>"
+            f"<div><strong>Started:</strong> {_fmt_dt(job.get('startedAt', ''))}</div>"
+            f"<div><strong>Finished:</strong> {_fmt_dt(job.get('finishedAt', ''))}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    if not stages:
+        st.info("No stage records have been created for this job yet.")
+        return
+
+    st.markdown("**Stage Progress**")
+    df_stages = pd.DataFrame(
+        [
+            {
+                "Stage": stage.get("stage", "---"),
+                "Status": str(stage.get("status", "pending")).upper(),
+                "Processed": int(stage.get("processedCombinations", 0) or 0),
+                "Total": int(stage.get("totalCombinations", 0) or 0),
+                "Progress %": (
+                    (int(stage.get("processedCombinations", 0) or 0) / int(stage.get("totalCombinations", 0) or 0) * 100.0)
+                    if int(stage.get("totalCombinations", 0) or 0)
+                    else 0.0
+                ),
+                "Started": _fmt_dt(stage.get("startedAt", "")),
+                "Finished": _fmt_dt(stage.get("finishedAt", "")),
+            }
+            for stage in stages
+        ]
+    )
+    st.dataframe(
+        df_stages,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Progress %": st.column_config.NumberColumn(format="%.1f%%")},
+    )
+
+    stage_cols = st.columns(len(stages))
+    for index, stage in enumerate(stages):
+        processed = int(stage.get("processedCombinations", 0) or 0)
+        total = int(stage.get("totalCombinations", 0) or 0)
+        pct = (processed / total) if total else 0.0
+        stage_status = str(stage.get("status", "pending")).lower()
+        accent = {
+            "completed": "#4CAF50",
+            "running": "#0046AD",
+            "pending": "#FFB74D",
+            "skipped": "#6b7280",
+        }.get(stage_status, "#6b7280")
+
+        with stage_cols[index]:
+            st.markdown(
+                f"<div class='simmons-card' style='text-align:center'>"
+                f"<div style='font-size:13px;font-weight:700;color:{accent}'>Stage {stage.get('stage')}</div>"
+                f"<div style='font-size:12px;color:#6b7280;margin-top:4px'>{stage_status.upper()}</div>"
+                f"<div class='simmons-kpi' style='font-size:20px;margin-top:6px'>{processed:,}</div>"
+                f"<div class='simmons-kpi-label'>of {total:,} combos</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.progress(float(pct))
+            st.caption(f"{pct * 100:.1f}% complete")
+
+
+if hasattr(st, "dialog"):
+
+    @st.dialog("Enumeration Stage Progress", width="large", dismissible=True, on_dismiss=_dismiss_job_progress_modal)
+    def _open_job_progress_dialog(job: dict) -> None:
+        _render_job_progress_body(job)
+
+else:
+
+    def _open_job_progress_dialog(job: dict) -> None:
+        st.markdown("---")
+        st.markdown("#### Enumeration Stage Progress")
+        _render_job_progress_body(job)
+
+
+def _render_sku_mix_body(
+    sku_trade: str,
+    all_mixes: list[dict],
+    metrics_by_mix: dict[str, list[dict]],
+    all_strategies: dict[str, dict],
+    bucket_labels: dict[str, str],
+    selected_bucket_id: str | None,
+) -> None:
+    df_mixes = _mixes_for_sku(
+        sku_trade,
+        all_mixes,
+        metrics_by_mix,
+        all_strategies,
+        bucket_labels,
+        selected_bucket_id,
+    )
+
+    scope_text = bucket_labels.get(selected_bucket_id, "all buckets") if selected_bucket_id else "all buckets"
+    st.caption(f"Mix coverage for SKU {sku_trade} across {scope_text}.")
+
+    if df_mixes.empty:
+        st.info("No mixes were found for this SKU in the current scope.")
+        return
+
+    dialog_rows = df_mixes.drop(columns=["Open Mix"]).reset_index(drop=True)
+    st.caption("Choose a mix below to inspect its full bucket performance and unit plan in this dialog.")
+    overview_cols = [
+        "Mix ID",
+        "Line",
+        "Parts",
+        "Plant",
+        "Bird Size",
+        "Usable Buckets",
+        "Best Bucket",
+        "Best Upgrade %",
+        "Avg Upgrade %",
+        "Avg Trim %",
+    ]
+    st.dataframe(
+        dialog_rows[overview_cols],
+        use_container_width=True,
+        hide_index=True,
+        height=220,
+        column_config={
+            "Best Upgrade %": st.column_config.NumberColumn(format="%.2f%%"),
+            "Avg Upgrade %": st.column_config.NumberColumn(format="%.2f%%"),
+            "Avg Trim %": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+    st.markdown("**Mixes For This SKU**")
+    button_columns = st.columns(3)
+    current_selected_mix_id = st.session_state.get("enum_sku_mix_selected_mix_id") or str(dialog_rows.iloc[0]["Mix ID"])
+    for index, row in dialog_rows.iterrows():
+        mix_id = str(row["Mix ID"])
+        upgrade_value = row.get("Best Upgrade %")
+        button_label = (
+            f"{mix_id[:8]} | {row.get('Line', '---')} | {upgrade_value:.1f}%"
+            if pd.notna(upgrade_value)
+            else f"{mix_id[:8]} | {row.get('Line', '---')}"
+        )
+        with button_columns[index % 3]:
+            if st.button(
+                button_label,
+                key=f"sku_mix_pick_{sku_trade}_{mix_id}",
+                type="primary" if mix_id == current_selected_mix_id else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["enum_sku_mix_selected_mix_id"] = mix_id
+                current_selected_mix_id = mix_id
+                st.rerun()
+
+    selected_mix_id = current_selected_mix_id
+    detail_context = _build_mix_detail_context(
+        selected_mix_id,
+        all_mixes,
+        metrics_by_mix,
+        all_strategies,
+        selected_bucket_id,
+    )
+    if detail_context:
+        st.markdown("---")
+        st.markdown("#### Selected Mix Detail")
+        _render_mix_detail_body(detail_context, bucket_labels)
+
+
+if hasattr(st, "dialog"):
+
+    @st.dialog("SKU Mix Coverage", width="large", dismissible=True, on_dismiss=_dismiss_sku_mix_modal)
+    def _open_sku_mix_dialog(
+        sku_trade: str,
+        all_mixes: list[dict],
+        metrics_by_mix: dict[str, list[dict]],
+        all_strategies: dict[str, dict],
+        bucket_labels: dict[str, str],
+        selected_bucket_id: str | None,
+    ) -> None:
+        _render_sku_mix_body(
+            sku_trade,
+            all_mixes,
+            metrics_by_mix,
+            all_strategies,
+            bucket_labels,
+            selected_bucket_id,
+        )
+
+else:
+
+    def _open_sku_mix_dialog(
+        sku_trade: str,
+        all_mixes: list[dict],
+        metrics_by_mix: dict[str, list[dict]],
+        all_strategies: dict[str, dict],
+        bucket_labels: dict[str, str],
+        selected_bucket_id: str | None,
+    ) -> None:
+        st.markdown("---")
+        st.markdown("#### SKU Mix Coverage")
+        _render_sku_mix_body(
+            sku_trade,
+            all_mixes,
+            metrics_by_mix,
+            all_strategies,
+            bucket_labels,
+            selected_bucket_id,
+        )
 
 
 def _build_mix_detail_context(
@@ -228,35 +638,87 @@ def _render_mix_detail_body(detail_context: dict, bucket_labels: dict[str, str])
     mix_metrics = detail_context["metrics"]
     strategy = detail_context["strategy"]
     flags = detail_context["flags"]
-
-    st.caption(
-        "Review the selected mix configuration, bucket performance, and the best unit plan without leaving the results table."
+    skus_str = _fmt_skus(mix_obj.get("skus", {}))
+    sorted_metrics = sorted(
+        mix_metrics,
+        key=lambda item: item.get("upgradePercentage") or 0,
+        reverse=True,
     )
 
-    det1, det2, det3 = st.columns([2, 2, 1])
+    if st.session_state.get("enum_mix_detail_bucket_mix_id") != mix_id:
+        st.session_state["enum_mix_detail_bucket_mix_id"] = mix_id
+        st.session_state["enum_mix_detail_bucket_id"] = None
 
-    with det1:
-        st.markdown("**Mix Configuration**")
-        skus_str = _fmt_skus(mix_obj.get("skus", {}))
-        st.markdown(
-            f"<div class='simmons-card'>"
-            f"<table style='width:100%;font-size:13px;border-collapse:collapse'>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>SKUs</td><td><strong>{skus_str}</strong></td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Line Type</td><td>{mix_obj.get('mfgType', '---')}</td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Parts</td><td>{', '.join(strategy.get('parts', []) or ['---'])}</td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Plant</td><td>{mix_obj.get('reqPlant', '---')}</td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Bird Size</td><td>{mix_obj.get('reqBirdSize', '---')}</td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Fillets</td><td>{mix_obj.get('numFillets', '---')} ({mix_obj.get('filletWeight', '---')}g)</td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Belt Speed</td><td>{mix_obj.get('beltSpeed', '---')}</td></tr>"
-            f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Flags</td><td>{' '.join(flags) if flags else '---'}</td></tr>"
-            f"</table></div>",
-            unsafe_allow_html=True,
+    selected_bucket_id = st.session_state.get("enum_mix_detail_bucket_id")
+    available_bucket_ids = {
+        str(metric.get("bucketId", "")).strip()
+        for metric in sorted_metrics
+        if str(metric.get("bucketId", "")).strip()
+    }
+    if selected_bucket_id not in available_bucket_ids:
+        selected_bucket_id = _default_mix_detail_bucket_id(sorted_metrics)
+        st.session_state["enum_mix_detail_bucket_id"] = selected_bucket_id
+
+    if sorted_metrics:
+        upgrades_m = [m.get("upgradePercentage") for m in sorted_metrics if m.get("upgradePercentage") is not None]
+        trims_m = [m.get("trimPercentage") for m in sorted_metrics if m.get("trimPercentage") is not None]
+        kpi_cards = [
+            ("Usable Buckets", str(len(sorted_metrics))),
+            ("Best Upgrade", f"{max(upgrades_m):.1f}%" if upgrades_m else "---"),
+            ("Avg Upgrade", f"{mean(upgrades_m):.1f}%" if upgrades_m else "---"),
+            ("Avg Trim", f"{mean(trims_m):.1f}%" if trims_m else "---"),
+        ]
+        kpi_html = "".join(
+            f"<div class='simmons-kpi-flex-card'>"
+            f"<div class='simmons-kpi-flex-label'>{label}</div>"
+            f"<div class='simmons-kpi-flex-value'>{value}</div>"
+            f"</div>"
+            for label, value in kpi_cards
+        )
+        st.markdown(f"<div class='simmons-kpi-flex-row'>{kpi_html}</div>", unsafe_allow_html=True)
+
+    st.markdown("**Mix Configuration**")
+    st.markdown(
+        f"<div class='simmons-card simmons-detail-config-card'>"
+        f"<table style='width:100%;font-size:13px;border-collapse:collapse'>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>SKUs</td><td><strong>{skus_str}</strong></td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Line Type</td><td>{mix_obj.get('mfgType', '---')}</td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Parts</td><td>{', '.join(strategy.get('parts', []) or ['---'])}</td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Plant</td><td>{mix_obj.get('reqPlant', '---')}</td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Bird Size</td><td>{mix_obj.get('reqBirdSize', '---')}</td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Fillets</td><td>{mix_obj.get('numFillets', '---')} ({mix_obj.get('filletWeight', '---')}g)</td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Belt Speed</td><td>{mix_obj.get('beltSpeed', '---')}</td></tr>"
+        f"<tr><td style='color:#888;padding:2px 8px 2px 0'>Flags</td><td>{' '.join(flags) if flags else '---'}</td></tr>"
+        f"</table></div>",
+        unsafe_allow_html=True,
+    )
+
+    selected_metric = None
+    if sorted_metrics:
+        selected_metric = next(
+            (metric for metric in sorted_metrics if str(metric.get("bucketId", "")).strip() == selected_bucket_id),
+            None,
+        )
+        if selected_metric is None:
+            selected_metric = max(sorted_metrics, key=lambda item: item.get("upgradePercentage") or 0)
+
+    selected_bucket_label = "[---, ---]"
+    selected_bucket_summary = "Select a bucket to preview the matching unit plan."
+    if selected_metric:
+        selected_bucket_label = bucket_labels.get(str(selected_metric.get("bucketId", "")), "[---, ---]")
+        selected_bucket_summary = (
+            f"Bucket {selected_bucket_label} | "
+            f"Upgrade: {selected_metric.get('upgradePercentage', 0):.2f}% | "
+            f"Trim: {selected_metric.get('trimPercentage', 0):.2f}%"
         )
 
-    with det2:
+    metrics_left, metrics_right = st.columns(2)
+
+    with metrics_left:
         st.markdown("**Bucket Performance**")
-        if mix_metrics:
-            df_mm = pd.DataFrame(mix_metrics).sort_values("upgradePercentage", ascending=False)
+        st.caption(selected_bucket_summary if sorted_metrics else "No bucket metrics for this mix.")
+        if sorted_metrics:
+            df_mm = pd.DataFrame(sorted_metrics)
             df_mm["Bucket"] = df_mm["bucketId"].map(lambda value: bucket_labels.get(str(value), "[---, ---]"))
             show_cols = [
                 col
@@ -269,11 +731,14 @@ def _render_mix_detail_body(detail_context: dict, bucket_labels: dict[str, str])
                 ]
                 if col in df_mm.columns
             ]
-            st.dataframe(
+            bucket_event = st.dataframe(
                 df_mm[show_cols].reset_index(drop=True),
                 use_container_width=True,
                 hide_index=True,
-                height=220,
+                height=240,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"mix_bucket_perf_{mix_id}",
                 column_config={
                     "upgradePercentage": st.column_config.NumberColumn("Upgrade %", format="%.2f%%"),
                     "trimPercentage": st.column_config.NumberColumn("Trim %", format="%.2f%%"),
@@ -281,79 +746,54 @@ def _render_mix_detail_body(detail_context: dict, bucket_labels: dict[str, str])
                     "value": st.column_config.NumberColumn("Value $", format="%.2f"),
                 },
             )
+            bucket_rows = bucket_event.selection.rows if bucket_event and bucket_event.selection else []
+            if bucket_rows:
+                selected_bucket_id = str(df_mm.iloc[bucket_rows[0]].get("bucketId", "")).strip() or selected_bucket_id
+                st.session_state["enum_mix_detail_bucket_id"] = selected_bucket_id
+                selected_metric = next(
+                    (
+                        metric
+                        for metric in sorted_metrics
+                        if str(metric.get("bucketId", "")).strip() == selected_bucket_id
+                    ),
+                    selected_metric,
+                )
+                selected_bucket_label = bucket_labels.get(str(selected_metric.get("bucketId", "")), "[---, ---]")
+                selected_bucket_summary = (
+                    f"Bucket {selected_bucket_label} | "
+                    f"Upgrade: {selected_metric.get('upgradePercentage', 0):.2f}% | "
+                    f"Trim: {selected_metric.get('trimPercentage', 0):.2f}%"
+                )
         else:
             st.info("No bucket metrics for this mix.")
 
-    with det3:
-        st.markdown("**KPIs**")
-        if mix_metrics:
-            upgrades_m = [m.get("upgradePercentage") for m in mix_metrics if m.get("upgradePercentage") is not None]
-            trims_m = [m.get("trimPercentage") for m in mix_metrics if m.get("trimPercentage") is not None]
-            st.metric("Buckets", len(mix_metrics))
-            st.metric("Best Upgrade", f"{max(upgrades_m):.1f}%" if upgrades_m else "---")
-            st.metric("Avg Upgrade", f"{mean(upgrades_m):.1f}%" if upgrades_m else "---")
-            st.metric("Avg Trim", f"{mean(trims_m):.1f}%" if trims_m else "---")
-        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
-        if st.button("Send to Scheduling", type="primary", key=f"send_to_sched_{mix_id}"):
-            st.session_state["sched_selected_mix_id"] = mix_id
-            _dismiss_mix_detail_modal()
-            try:
-                st.query_params["page"] = "Scheduling Dashboard"
-            except Exception:
-                st.session_state.ui_selected_page = "Scheduling Dashboard"
-                st.session_state.ui_sidebar_nav = "Scheduling Dashboard"
-            st.rerun()
-
-    if mix_metrics:
-        best_metric = max(mix_metrics, key=lambda item: item.get("upgradePercentage") or 0)
-        unit_plan = best_metric.get("unitPlan", [])
-        if unit_plan:
-            best_bucket_label = bucket_labels.get(str(best_metric.get("bucketId", "")), "[---, ---]")
-            st.markdown("**Unit Plan - Best Performing Bucket**")
-            st.caption(
-                f"Bucket {best_bucket_label} | Upgrade: {best_metric.get('upgradePercentage', 0):.2f}% | Trim: {best_metric.get('trimPercentage', 0):.2f}%"
-            )
-            df_plan = pd.DataFrame(unit_plan)
-            plan_cols = [c for c in ["sku", "partCode", "unitsInPlan", "totalWeightInPlan", "pctOfTotal"] if c in df_plan.columns]
-            st.dataframe(
-                df_plan[plan_cols].reset_index(drop=True),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "totalWeightInPlan": st.column_config.NumberColumn("Total Wt (g)", format="%.1f"),
-                    "pctOfTotal": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
-                },
-            )
-
-    export_col, close_col = st.columns([2, 1])
-    with export_col:
-        if mix_metrics:
-            df_export = pd.DataFrame(mix_metrics).sort_values("upgradePercentage", ascending=False)
-            st.download_button(
-                "Export Metrics CSV",
-                data=df_export.to_csv(index=False).encode(),
-                file_name=f"mix-metrics-{mix_id[:8]}.csv",
-                mime="text/csv",
-                key=f"mix_metrics_export_{mix_id}",
-            )
-    with close_col:
-        if st.button("Close", key=f"close_mix_detail_{mix_id}"):
-            _dismiss_mix_detail_modal()
-            st.rerun()
-
+    with metrics_right:
+        st.markdown("**Unit Plan - Selected Bucket**")
+        if selected_metric:
+            unit_plan = selected_metric.get("unitPlan", [])
+            st.caption(selected_bucket_summary)
+            if unit_plan:
+                df_plan = pd.DataFrame(unit_plan)
+                plan_cols = [c for c in ["sku", "partCode", "unitsInPlan", "totalWeightInPlan", "pctOfTotal"] if c in df_plan.columns]
+                st.dataframe(
+                    df_plan[plan_cols].reset_index(drop=True),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=240,
+                    column_config={
+                        "totalWeightInPlan": st.column_config.NumberColumn("Total Wt (g)", format="%.1f"),
+                        "pctOfTotal": st.column_config.NumberColumn("% of Total", format="%.1f%%"),
+                    },
+                )
+            else:
+                st.info("No unit plan is available for the selected bucket.")
+        else:
+            st.info("Select a bucket to preview its unit plan.")
 
 if hasattr(st, "dialog"):
 
     @st.dialog("Mix Detail", width="large", dismissible=True, on_dismiss=_dismiss_mix_detail_modal)
     def _open_mix_detail_dialog(detail_context: dict, bucket_labels: dict[str, str]) -> None:
-        if st.session_state.get("enum_mix_detail_loading", False):
-            skeleton_placeholder = st.empty()
-            with skeleton_placeholder.container():
-                _render_mix_detail_skeleton()
-            time.sleep(0.15)
-            skeleton_placeholder.empty()
-            st.session_state["enum_mix_detail_loading"] = False
-
         _render_mix_detail_body(detail_context, bucket_labels)
 
 else:
@@ -413,6 +853,24 @@ def _build_mixes_df(
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+def _cached_build_mixes_df(
+    mixes: list[dict],
+    strategies: dict[str, dict],
+    metrics_by_mix: dict[str, list[dict]],
+    bucket_filter_id: str | None,
+    bucket_labels: dict[str, str],
+    metric_count: int,
+) -> pd.DataFrame:
+    cache_key = ("mixes_df", len(mixes), len(strategies), metric_count, bucket_filter_id or "__all__")
+    cache = st.session_state.setdefault("enum_cached_mixes_df", {})
+    if cache_key in cache:
+        return cache[cache_key]
+
+    df = _build_mixes_df(mixes, strategies, metrics_by_mix, bucket_filter_id, bucket_labels)
+    cache[cache_key] = df
+    return df
 
 
 def _build_sku_analytics_df(
@@ -485,6 +943,23 @@ def _build_sku_analytics_df(
     return pd.DataFrame(rows)
 
 
+def _cached_build_sku_analytics_df(
+    skus: list[dict],
+    mixes: list[dict],
+    metrics_by_mix: dict[str, list[dict]],
+    bucket_filter_id: str | None,
+    metric_count: int,
+) -> pd.DataFrame:
+    cache_key = ("sku_df", len(skus), len(mixes), metric_count, bucket_filter_id or "__all__")
+    cache = st.session_state.setdefault("enum_cached_sku_analytics_df", {})
+    if cache_key in cache:
+        return cache[cache_key]
+
+    df = _build_sku_analytics_df(skus, mixes, metrics_by_mix, bucket_filter_id)
+    cache[cache_key] = df
+    return df
+
+
 def _render_sku_input_section(skus: list, df_skus: pd.DataFrame, plant_options: list[str]):
     with st.expander("SKU Input Data", expanded=False):
         if not skus:
@@ -534,9 +1009,10 @@ def _render_results_section(
     all_strategies: dict,
     all_buckets: list,
 ):
-    bucket_labels = _bucket_label_map(all_buckets)
+    bucket_labels = _cached_bucket_label_map(all_buckets)
     bucket_ids = [str(bucket.get("_id", "")) for bucket in all_buckets if str(bucket.get("_id", ""))]
-    metrics_by_mix = _metrics_by_mix(all_metrics)
+    metrics_by_mix = _cached_metrics_by_mix(all_metrics)
+    metric_count = len(all_metrics)
 
     res_hdr, res_refresh = st.columns([5, 1])
     with res_hdr:
@@ -550,11 +1026,11 @@ def _render_results_section(
         )
     with res_refresh:
         st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button("↻ Refresh Results", key="enum_refresh_results"):
+        if st.button("↻ Refresh Results", key="enum_refresh_results", use_container_width=True):
             _clear_results_cache()
             st.rerun()
 
-    df_mixes = _build_mixes_df(all_mixes, all_strategies, metrics_by_mix, None, bucket_labels)
+    df_mixes = _cached_build_mixes_df(all_mixes, all_strategies, metrics_by_mix, None, bucket_labels, metric_count)
 
     if not all_mixes:
         st.info("No enumeration results available yet. Submit a job below to generate portioning mixes.")
@@ -627,7 +1103,14 @@ def _render_results_section(
 
     selected_bucket_id = None if filt_bucket == "All" else filt_bucket
     if selected_bucket_id:
-        df_mixes = _build_mixes_df(all_mixes, all_strategies, metrics_by_mix, selected_bucket_id, bucket_labels)
+        df_mixes = _cached_build_mixes_df(
+            all_mixes,
+            all_strategies,
+            metrics_by_mix,
+            selected_bucket_id,
+            bucket_labels,
+            metric_count,
+        )
 
     df_filtered = df_mixes.copy()
     if filt_plant != "All":
@@ -719,7 +1202,7 @@ def _render_results_section(
     with page_nav_mid:
         st.caption(f"Page {current_page} of {total_pages} | {total_rows} filtered mixes")
     with page_nav_right:
-        if st.button("Next ▶", key="res_page_next", disabled=current_page >= total_pages):
+        if st.button("Next ▶", key="res_page_next", disabled=current_page >= total_pages, use_container_width=True):
             st.session_state["res_page"] = current_page + 1
             st.rerun()
 
@@ -799,26 +1282,26 @@ def _render_results_section(
     selected_mix_id = df_page.iloc[selected_rows[0]]["_id"] if selected_rows else None
 
     remembered_selection = st.session_state.get("enum_mix_table_selection")
-    next_selection, mix_to_open, show_loading_state = _consume_mix_selection(selected_mix_id, remembered_selection)
+    next_selection, mix_to_open = _consume_mix_selection(selected_mix_id, remembered_selection)
     st.session_state["enum_mix_table_selection"] = next_selection
 
     if mix_to_open:
-        st.session_state["enum_mix_detail_open_id"] = mix_to_open
-        st.session_state["enum_mix_detail_loading"] = show_loading_state
+        _activate_dialog_state(
+            "enum_mix_detail_open_id",
+            mix_to_open,
+            "enum_sku_mix_open_sku",
+            "enum_job_progress_open_id",
+        )
 
     open_mix_id = st.session_state.get("enum_mix_detail_open_id")
-    if open_mix_id:
-        detail_context = _build_mix_detail_context(
-            open_mix_id,
-            all_mixes,
-            metrics_by_mix,
-            all_strategies,
-            selected_bucket_id,
-        )
-        if detail_context:
-            _open_mix_detail_dialog(detail_context, bucket_labels)
-        else:
-            _dismiss_mix_detail_modal()
+    if open_mix_id and not _build_mix_detail_context(
+        open_mix_id,
+        all_mixes,
+        metrics_by_mix,
+        all_strategies,
+        selected_bucket_id,
+    ):
+        _dismiss_mix_detail_modal()
 
     return df_mixes, metrics_by_mix, selected_bucket_id, bucket_labels
 
@@ -857,6 +1340,7 @@ def _render_sku_analytics_section(
     skus: list[dict],
     all_mixes: list[dict],
     metrics_by_mix: dict[str, list[dict]],
+    all_strategies: dict[str, dict],
     selected_bucket_id: str | None,
     bucket_labels: dict[str, str],
 ):
@@ -874,7 +1358,8 @@ def _render_sku_analytics_section(
         f"Statistics are calculated across {scope_text}."
     )
 
-    df_sku = _build_sku_analytics_df(skus, all_mixes, metrics_by_mix, selected_bucket_id)
+    metric_count = sum(len(items) for items in metrics_by_mix.values())
+    df_sku = _cached_build_sku_analytics_df(skus, all_mixes, metrics_by_mix, selected_bucket_id, metric_count)
     if df_sku.empty:
         st.info("No SKU analytics available yet.")
         return
@@ -989,31 +1474,41 @@ def _render_job_status_section():
         )
 
     df_jobs = pd.DataFrame(rows)
-    st.dataframe(df_jobs.drop(columns=["_jobId"]), use_container_width=True, hide_index=True)
+    st.caption("Select a recent job row to open stage progress in a dialog.")
+    event = st.dataframe(
+        df_jobs.drop(columns=["_jobId"]),
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="enum_jobs_table",
+    )
 
-    completed = [job for job in jobs_sorted if job.get("status") == "completed"]
-    if completed:
-        latest = completed[0]
-        with st.expander(f"Stage Detail - {latest.get('runId', '—')}", expanded=False):
-            stages = latest.get("stages", [])
-            if stages:
-                sc_cols = st.columns(len(stages))
-                for index, stage in enumerate(stages):
-                    processed = stage.get("processedCombinations", 0)
-                    total = stage.get("totalCombinations", 0)
-                    pct = int(100 * processed / total) if total else 0
-                    with sc_cols[index]:
-                        st.markdown(
-                            f"<div class='simmons-card' style='text-align:center'>"
-                            f"<div style='font-size:13px;font-weight:600;color:#0046AD'>Stage {stage.get('stage')}</div>"
-                            f"<div class='simmons-kpi' style='font-size:20px'>{processed:,}</div>"
-                            f"<div class='simmons-kpi-label'>of {total:,} combos</div>"
-                            f"<div style='margin-top:6px;font-size:11px;color:#4CAF50'>{pct}% complete</div>"
-                            f"<div style='margin-top:2px;font-size:10px;color:#888'>"
-                            f"{_fmt_dt(stage.get('startedAt', ''))} -> {_fmt_dt(stage.get('finishedAt', ''))}"
-                            f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
+    selected_rows = event.selection.rows if event and event.selection else []
+    selected_job_id = df_jobs.iloc[selected_rows[0]]["_jobId"] if selected_rows else None
+
+    remembered_selection = st.session_state.get("enum_job_table_selection")
+    next_selection, job_to_open = _consume_job_progress_selection(selected_job_id, remembered_selection)
+    st.session_state["enum_job_table_selection"] = next_selection
+
+    if job_to_open:
+        _activate_dialog_state(
+            "enum_job_progress_open_id",
+            job_to_open,
+            "enum_mix_detail_open_id",
+            "enum_sku_mix_open_sku",
+        )
+
+    open_job_id = st.session_state.get("enum_job_progress_open_id")
+    if open_job_id:
+        selected_job = next(
+            (job for job in jobs_sorted if (job.get("jobId") or job.get("_id")) == open_job_id),
+            None,
+        )
+        if selected_job:
+            _open_job_progress_dialog(selected_job)
+        else:
+            _dismiss_job_progress_modal()
 
     running_ids = [row["_jobId"] for row in rows if row["Status"] in ("running", "pending") and row["_jobId"]]
     if running_ids:
@@ -1112,11 +1607,45 @@ def _render_job_submission_section(plant_options: list[str]):
         )
 
 
+def _render_active_dialogs(
+    all_mixes: list[dict],
+    metrics_by_mix: dict[str, list[dict]],
+    all_strategies: dict[str, dict],
+    bucket_labels: dict[str, str],
+) -> None:
+    open_sku = st.session_state.get("enum_sku_mix_open_sku")
+    open_mix_id = st.session_state.get("enum_mix_detail_open_id")
+
+    if open_sku:
+        if any(str(open_sku) in {str(key).strip() for key in mix.get("skus", {}).keys()} for mix in all_mixes):
+            _open_sku_mix_dialog(
+                str(open_sku),
+                all_mixes,
+                metrics_by_mix,
+                all_strategies,
+                bucket_labels,
+                st.session_state.get("enum_mix_detail_bucket_id"),
+            )
+        else:
+            _dismiss_sku_mix_modal()
+        return
+
+    if open_mix_id:
+        detail_context = _build_mix_detail_context(
+            str(open_mix_id),
+            all_mixes,
+            metrics_by_mix,
+            all_strategies,
+            st.session_state.get("enum_mix_detail_bucket_id"),
+        )
+        if detail_context:
+            _open_mix_detail_dialog(detail_context, bucket_labels)
+        else:
+            _dismiss_mix_detail_modal()
+
+
 def render():
-    try:
-        skus = search_skus({})
-    except Exception:
-        skus = []
+    skus = _load_all_skus()
 
     if skus:
         df_skus = pd.DataFrame(skus)
@@ -1129,6 +1658,15 @@ def render():
     all_metrics = _load_all_metrics()
     all_strategies = _load_cut_strategies()
     all_buckets = _load_all_buckets()
+    metrics_by_mix_all = _metrics_by_mix(all_metrics)
+    bucket_labels_all = _bucket_label_map(all_buckets)
+
+    try:
+        mix_id_from_query = st.query_params.get("mixId")
+    except Exception:
+        mix_id_from_query = None
+    if mix_id_from_query and any(str(mix.get("_id", "")) == str(mix_id_from_query) for mix in all_mixes):
+        st.session_state["enum_mix_detail_open_id"] = str(mix_id_from_query)
 
     df_mixes, metrics_by_mix, selected_bucket_id, bucket_labels = _render_results_section(
         all_mixes,
@@ -1141,10 +1679,11 @@ def render():
     st.markdown("---")
     _render_sku_input_section(skus, df_skus, plant_options)
     st.markdown("---")
-    _render_sku_analytics_section(skus, all_mixes, metrics_by_mix, selected_bucket_id, bucket_labels)
+    _render_sku_analytics_section(skus, all_mixes, metrics_by_mix, all_strategies, selected_bucket_id, bucket_labels)
     st.markdown("---")
     _render_job_status_section()
     _render_job_submission_section(plant_options)
+    _render_active_dialogs(all_mixes, metrics_by_mix_all, all_strategies, bucket_labels_all)
 
     st.caption(
         "Workflow: Review Input Data -> Review Results -> Review Analytics -> Review SKU Analytics -> Review Job Status -> Configure & Submit Enumeration Run"

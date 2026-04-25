@@ -85,13 +85,19 @@ def get_job_artifacts(job_id: str, service: JobService = Depends(_get_service)) 
 
 @router.get(
     "/{job_id}/results",
-    summary="Get stored scheduling results payload",
+    summary="Scheduling results payload is not persisted",
 )
 def get_job_results(job_id: str, service: JobService = Depends(_get_service)):
-    results = service.get_results(job_id)
-    if results is None:
+    job = service.get_job(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail=f"Results for job {job_id} not found")
-    return results
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Scheduling worker jobs no longer persist raw scheduling_results payloads. "
+            "Use the Scheduling API collections and job artifacts instead."
+        ),
+    )
 
 
 @router.get(

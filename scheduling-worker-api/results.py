@@ -37,11 +37,42 @@ def extract_decision_assignments(model, bucket_of_k, line_of_k):
                     "bucket": bucket_of_k[str(k)] if str(k) in bucket_of_k else bucket_of_k[k],
                     "line": format_line_name(line_of_k[str(k)] if str(k) in line_of_k else line_of_k[k]),
                     "date": format_date(t),
-                    "assigned_lbs": round(float(val), 3)
+                    "assigned_lbs": round(float(val), 3),
+                    "upgrade_pct": round(float(value(model.upgrade_pct[k])), 4),
+                    "upgrade_lbs": round(float(val) * float(value(model.upgrade_pct[k])), 3)
                 })
+
 
     return pd.DataFrame(rows)
 
+def extract_daily_upgrade_summary(model):
+    rows = []
+
+    for t in model.T:
+        total_lbs = 0.0
+        weighted_upgrade = 0.0
+        num_batches = 0
+
+        for k in model.K:
+            val = value(model.x[k, t])
+            if val is not None and val > 1e-6:
+                lbs = float(val)
+                upg = float(value(model.upgrade_pct[k]))
+
+                total_lbs += lbs
+                weighted_upgrade += lbs * upg
+                num_batches += 1
+
+        avg_upgrade_pct = weighted_upgrade / total_lbs if total_lbs > 0 else 0.0
+
+        rows.append({
+            "date": format_date(t),
+            "num_batches": num_batches,
+            "total_assigned_lbs": round(total_lbs, 3),
+            "avg_upgrade_pct": round(avg_upgrade_pct, 4)
+        })
+
+    return pd.DataFrame(rows)
 
 def extract_line_schedule(model, line_of_k):
     rows = []
@@ -224,10 +255,13 @@ def extract_all_results(model, inputs):
         inputs["line_of_k"]
     )
 
+    daily_upgrade_df = extract_daily_upgrade_summary(model)
+
     line_schedule_df = extract_line_schedule(
         model,
         inputs["line_of_k"]
     )
+
 
     pattern_mix_df = extract_pattern_mix_by_date(model)
 
@@ -267,4 +301,5 @@ def extract_all_results(model, inputs):
         "production_vs_demand_by_date": prod_vs_dem_df,
         "monthly_contract_summary": monthly_contract_df,
         "bucket_usage_by_date": bucket_usage_df,
+        "daily_upgrade_summary": daily_upgrade_df,
     }

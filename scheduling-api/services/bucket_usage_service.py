@@ -11,8 +11,12 @@ class BucketUsageService:
     def __init__(self, repository: BucketUsageRepository):
         self.repository = repository
 
+    @staticmethod
+    def _to_mongo_document(model) -> Dict[str, Any]:
+        return model.model_dump(by_alias=True, mode="json")
+
     def create(self, payload: BucketUsageCreate) -> BucketUsage:
-        document = BucketUsage(**payload.model_dump(by_alias=True)).model_dump(by_alias=True)
+        document = self._to_mongo_document(BucketUsage(**payload.model_dump(by_alias=True)))
         try:
             inserted = self.repository.create(document)
         except DuplicateKeyError:
@@ -26,11 +30,11 @@ class BucketUsageService:
         return BucketUsage(**document)
 
     def search(self, criteria: BucketUsageSearchCriteria) -> List[BucketUsage]:
-        mongo_criteria: Dict[str, Any] = criteria.model_dump(by_alias=True, exclude_none=True)
+        mongo_criteria: Dict[str, Any] = criteria.model_dump(by_alias=True, exclude_none=True, mode="json")
         return [BucketUsage(**doc) for doc in self.repository.search(mongo_criteria)]
 
     def update(self, document_id: str, payload: BucketUsageUpdate) -> Optional[BucketUsage]:
-        document = BucketUsage(_id=document_id, **payload.model_dump(by_alias=True)).model_dump(by_alias=True)
+        document = self._to_mongo_document(BucketUsage(_id=document_id, **payload.model_dump(by_alias=True)))
         try:
             updated = self.repository.update(document_id, document)
         except DuplicateKeyError:
@@ -47,7 +51,7 @@ class BucketUsageService:
             self.repository.delete_by_dates(clear_dates)
         documents = []
         for item in items:
-            doc = BucketUsage(**item.model_dump(by_alias=True)).model_dump(by_alias=True)
+            doc = self._to_mongo_document(BucketUsage(**item.model_dump(by_alias=True)))
             doc["_id"] = str(ObjectId())
             documents.append(doc)
         inserted = self.repository.bulk_create(documents)

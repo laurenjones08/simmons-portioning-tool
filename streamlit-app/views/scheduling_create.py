@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from urllib.parse import urlencode
 
 import pandas as pd
 import streamlit as st
@@ -13,6 +14,7 @@ from views.scheduling_shared import format_timestamp, job_label, sort_records_by
 _MAX_ERROR_PREVIEW_CHARS = 2000
 _MAX_SKU_REFERENCE_ROWS = 200
 _MAX_SKU_SELECTOR_OPTIONS = 300
+_DEFAULT_MAX_TRIM_PERCENTAGE = 25.0
 
 
 def _handle_api_error(error: APIError, action: str) -> None:
@@ -85,6 +87,8 @@ def _limit_sku_selector_options(sku_ids: list[str], selected_ids: list[str]) -> 
         if sku_id and sku_id not in capped:
             capped.append(sku_id)
     return capped
+
+
 def _sku_label(sku: dict) -> str:
     trade_number = str(sku.get("tradeNumber", "")).strip()
     customer = str(sku.get("customerName", "")).strip()
@@ -130,6 +134,74 @@ def _default_run_id() -> str:
     return f"schedule-{date.today().isoformat()}"
 
 
+def _parse_query_sku_ids(raw_value: object) -> list[str]:
+    if raw_value in (None, ""):
+        return []
+    if isinstance(raw_value, (list, tuple)):
+        values = raw_value
+    else:
+        values = str(raw_value).split(",")
+    seen: set[str] = set()
+    sku_ids: list[str] = []
+    for value in values:
+        sku_id = str(value).strip()
+        if not sku_id or sku_id in seen:
+            continue
+        seen.add(sku_id)
+        sku_ids.append(sku_id)
+    return sku_ids
+
+
+def _coerce_max_trim_percentage(raw_value: object, default: float = _DEFAULT_MAX_TRIM_PERCENTAGE) -> float:
+    try:
+        if raw_value in (None, ""):
+            return default
+        return min(100.0, max(0.0, float(raw_value)))
+    except Exception:
+        return default
+
+
+def _apply_query_prefill(
+    current_state: dict[str, object],
+    plant_options: list[str],
+    all_skus: list[dict],
+    query_plant_id: object,
+    query_sku_ids: object,
+    query_max_trim: object,
+) -> dict[str, object]:
+    signature = urlencode(
+        {
+            "plantId": str(query_plant_id or "").strip(),
+            "skuIds": ",".join(_parse_query_sku_ids(query_sku_ids)),
+            "maxTrimPercentage": str(query_max_trim or "").strip(),
+        }
+    )
+    if not signature or signature == current_state.get("scheduling_job_prefill_signature", ""):
+        return {}
+
+    next_state: dict[str, object] = {
+        "scheduling_job_prefill_signature": signature,
+    }
+    plant_id = str(query_plant_id or "").strip()
+    if plant_id and (not plant_options or plant_id in plant_options):
+        next_state["scheduling_job_plant_id"] = plant_id
+        next_state["scheduling_job_plant_selector"] = plant_id
+
+    valid_skus = {
+        str(sku.get("tradeNumber", "")).strip()
+        for sku in all_skus
+        if str(sku.get("tradeNumber", "")).strip()
+    }
+    parsed_sku_ids = [sku_id for sku_id in _parse_query_sku_ids(query_sku_ids) if sku_id in valid_skus]
+    if query_sku_ids not in (None, ""):
+        next_state["scheduling_job_selected_skus"] = parsed_sku_ids
+
+    if query_max_trim not in (None, ""):
+        next_state["scheduling_job_max_trim_percentage"] = _coerce_max_trim_percentage(query_max_trim)
+
+    return next_state
+
+
 def _upload_short_term_file_to_minio(uploaded_file) -> str | None:
     if uploaded_file is None:
         return None
@@ -150,9 +222,11 @@ def _init_state() -> None:
         "scheduling_job_sku_search": "",
         "scheduling_job_plant_id": "",
         "scheduling_job_selected_skus": [],
+        "scheduling_job_max_trim_percentage": _DEFAULT_MAX_TRIM_PERCENTAGE,
         "scheduling_job_last_submitted": None,
         "scheduling_job_submit_in_flight": False,
         "scheduling_job_show_recent_jobs": False,
+        "scheduling_job_prefill_signature": "",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -301,6 +375,25 @@ def render():
         st.session_state.scheduling_job_skus = _load_skus()
         all_skus = st.session_state.scheduling_job_skus or []
 
+    try:
+        query_plant_id = st.query_params.get("plantId")
+        query_sku_ids = st.query_params.get("skuIds")
+        query_max_trim = st.query_params.get("maxTrimPercentage")
+    except Exception:
+        query_plant_id = None
+        query_sku_ids = None
+        query_max_trim = None
+
+    for key, value in _apply_query_prefill(
+        st.session_state,
+        plant_options,
+        all_skus,
+        query_plant_id,
+        query_sku_ids,
+        query_max_trim,
+    ).items():
+        st.session_state[key] = value
+
     st.markdown("### Create Scheduling Run")
     plant_cols = st.columns(2)
     with plant_cols[0]:
@@ -372,6 +465,14 @@ def render():
                 step=1,
                 help="How many production days to include in the schedule.",
             )
+            max_trim_percentage = st.number_input(
+                "Max Allowable Trim %",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(st.session_state.get("scheduling_job_max_trim_percentage", _DEFAULT_MAX_TRIM_PERCENTAGE)),
+                step=0.5,
+                help="Any candidate decision above this trim percentage is filtered out before the optimizer builds the schedule.",
+            )
         with col2:
             uploaded_short_term_file = st.file_uploader(
                 "Short Term File (optional)",
@@ -410,6 +511,7 @@ def render():
     st.session_state.scheduling_job_plant_id = str(selected_plant).strip()
     st.session_state.scheduling_job_sku_search = str(sku_search).strip()
     st.session_state.scheduling_job_selected_skus = selected_sku_ids
+    st.session_state.scheduling_job_max_trim_percentage = float(max_trim_percentage)
 
     if submit_clicked:
         if not run_id.strip():
@@ -430,6 +532,7 @@ def render():
                 "tee": bool(tee),
                 "planStartDate": plan_start_date.isoformat(),
                 "horizonDays": int(horizon_days),
+                "maxTrimPercentage": float(max_trim_percentage),
             }
             try:
                 st.session_state.scheduling_job_submit_in_flight = True

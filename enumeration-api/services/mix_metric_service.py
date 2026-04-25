@@ -73,6 +73,8 @@ class MixMetricService:
         if raw.get("skuTradeNumber"):
             # Search denormalized skuKeys array
             mongo_criteria["skuKeys"] = raw["skuTradeNumber"]
+        if raw.get("maxTrimPercentage") is not None:
+            mongo_criteria["trimPercentage"] = {"$lte": raw["maxTrimPercentage"]}
 
         docs = self.repository.search(mongo_criteria)
         parsed: List[MixMetric] = []

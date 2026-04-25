@@ -42,8 +42,8 @@ app = FastAPI(
 
     ## Collections
 
-    * **scheduling_decisions**: Decision records for a mix, line, and date
-    * **scheduling_outputs**: Produced output records by decision and SKU
+    * **scheduling_decisions**: Decision records for a mix, line, and date, including duration, produced pounds, and upgrade percent
+    * **scheduling_outputs**: Produced output records by decision and SKU, including batch upgrade percent plus short-term and long-term contract pounds
     * **monthly_contracts**: Monthly contract demand by SKU and year-month
     * **bucket_usage**: Daily bucket availability and utilization
     * **available_wip**: Plant and bucket level WIP availability

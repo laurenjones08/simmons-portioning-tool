@@ -1,5 +1,6 @@
 import time
 
+from config import get_settings
 from data_prep import get_model_inputs
 from model_builder import build_model
 from solver import check_solution, load_solution, solve_model
@@ -9,12 +10,6 @@ from results import extract_all_results, save_results
 def _report_progress(progress_callback, stage, message, details=None):
     if progress_callback is not None:
         progress_callback(stage, message, details or {})
-
-
-def _debug_mode_enabled(job) -> bool:
-    if isinstance(job, dict):
-        return bool(job.get("debugMode") or job.get("debug_mode"))
-    return bool(getattr(job, "debug_mode", False) or getattr(job, "debugMode", False))
 
 
 def run_pipeline(
@@ -30,6 +25,7 @@ def run_pipeline(
     progress_callback=None,
 ):
     timings = {}
+    solver_name = get_settings().scheduling_solver
 
     # 1. Load / prepare inputs
     _report_progress(progress_callback, "data_prep", "Preparing model inputs.")
@@ -54,13 +50,6 @@ def run_pipeline(
             "counts": inputs.get("dataPrepCounts", {}),
         },
     )
-    if _debug_mode_enabled(job):
-        _report_progress(
-            progress_callback,
-            "debug_data_prep_ready",
-            "Dataprep snapshot is ready.",
-            {"debugDataPrep": inputs},
-        )
 
     # 2. Build model
     _report_progress(progress_callback, "model_build", "Building optimization model.")
@@ -84,8 +73,7 @@ def run_pipeline(
         month_of_day=inputs["month_of_day"],
         week1_dates=inputs["week1_dates"],
         line_throughput=inputs["line_throughput"],
-        big_allowed=inputs["big_allowed"],
-        small_allowed=inputs["small_allowed"],
+        upgrade_pct=inputs["upgrade_pct"],
         gamma=inputs["gamma"],
     )
     timings["model_build"] = round(time.perf_counter() - started, 3)
@@ -106,9 +94,9 @@ def run_pipeline(
         },
     )
     # 3. Solve
-    _report_progress(progress_callback, "solver", "Solving optimization model.")
+    _report_progress(progress_callback, "solver", f"Solving optimization model with {solver_name}.", {"solverName": solver_name})
     started = time.perf_counter()
-    solve_results, solver = solve_model(model, solver_name="highs", tee=tee)
+    solve_results, solver = solve_model(model, solver_name=solver_name, tee=tee)
     timings["solve"] = round(time.perf_counter() - started, 3)
     _report_progress(
         progress_callback,
@@ -116,6 +104,7 @@ def run_pipeline(
         "Solver finished.",
         {
             "timings": timings,
+            "solverName": solver_name,
             "solverStatus": str(getattr(getattr(solve_results, "solver", None), "status", None)),
             "terminationCondition": str(
                 getattr(
@@ -128,7 +117,7 @@ def run_pipeline(
     )
 
     # 4. Check solve status
-    check_solution(solve_results)
+    check_solution(solve_results, model=model, solver=solver)
     load_solution(model, solve_results, solver)
 
     # 5. Extract outputs

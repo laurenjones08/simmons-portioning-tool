@@ -184,6 +184,32 @@ def test_nugget_units_in_plan_scales_from_remaining_bucket_weight():
     assert nugget_item["totalWeightInPlan"] == 180
 
 
+def test_nugget_units_in_plan_uses_tolerance_adjusted_target_weight():
+    combo = [
+        make_sku("10001", ["D"], 100, product_type="FILET"),
+        make_sku("10002", ["M"], 100, product_type="FILET"),
+        make_sku("45066", ["R"], 20, customer_type="FDS", product_type="NUGGET|STRIP"),
+    ]
+    strategy = make_cut_strategy("cs-target-tol", ["D", "M", "R"], has_nugget=True)
+
+    mix = _build_mix(combo, strategy, plant_filter=None, bird_size_filter=None)
+    metric = _compute_mix_metric(
+        mix_id="mix-target-tol",
+        combo=combo,
+        skus_map=mix["skus"],
+        bucket=make_bucket("bucket-target-tol", min_weight=390, target_weight=390, max_weight=440),
+        includes_nug=True,
+        nugget_target_weight=20,
+        config_values={"fds_value": 0.0, "rtl_value": 0.0, "trim_value": 0.0, "tolerance_pct": 0.10},
+        part_assignments=mix["_partAssignments"],
+    )
+
+    nugget_item = next(item for item in metric["unitPlan"] if item["sku"] == "45066")
+    assert nugget_item["unitsInPlan"] == 7
+    assert nugget_item["totalWeightInPlan"] == 140
+    assert metric["totalProductProducedGrams"] == 340
+
+
 def test_nugget_value_increases_with_larger_bucket_when_more_nuggets_fit():
     combo = [
         make_sku("45066", ["D"], 16, customer_type="FDS", product_type="NUGGET|STRIP"),
@@ -298,6 +324,48 @@ def test_run_enumeration_does_not_persist_partial_multi_sku_mix_documents():
     assert bad_metrics == []
 
 
+def test_run_enumeration_clears_existing_mix_and_metric_documents_before_run():
+    client = mongomock.MongoClient()
+    db = client["enumeration_db"]
+
+    db["mixes"].insert_one({
+        "_id": "stale-mix",
+        "skus": {"OLD": "D"},
+        "skuKeys": ["OLD"],
+        "skuSetKey": "OLD",
+        "mfgType": "DSI888",
+    })
+    db["mix_metrics"].insert_one({
+        "_id": "stale-mix:bucket-old",
+        "mixId": "stale-mix",
+        "bucketId": "bucket-old",
+        "skuKeys": ["OLD"],
+    })
+
+    db["skus"].insert_one(make_sku("31035", ["D"], 100))
+    db["cut_strategies"].insert_one(make_cut_strategy("cs-clear", ["D"], has_nugget=False))
+    db["buckets"].insert_one(make_bucket("bucket-clear", min_weight=50, target_weight=150, max_weight=200))
+
+    job_repo = MagicMock()
+    job_repo.is_cancelled.return_value = False
+
+    with patch("config.get_settings", return_value=_mock_settings()), \
+         patch("enumeration_engine.requests.get", side_effect=_mock_requests_get):
+        run_enumeration(
+            db=db,
+            job_id="job-clear",
+            run_id="run-clear",
+            job_repo=job_repo,
+            max_combination_size=1,
+            batch_size=1000,
+        )
+
+    assert db["mixes"].find_one({"_id": "stale-mix"}) is None
+    assert db["mix_metrics"].find_one({"_id": "stale-mix:bucket-old"}) is None
+    assert db["mixes"].count_documents({}) == 1
+    assert db["mix_metrics"].count_documents({}) == 1
+
+
 def test_mix_weight_above_bucket_target_does_not_persist_metric():
     client = mongomock.MongoClient()
     db = client["enumeration_db"]
@@ -340,6 +408,7 @@ def test_mix_weight_above_bucket_target_does_not_persist_metric():
         combo,
         make_bucket("bucket-3", min_weight=300, target_weight=300, max_weight=390),
         includes_nug=False,
+        config_values={"tolerance_pct": 0.0},
         nugget_target_weight=None,
     )
 
@@ -505,6 +574,36 @@ def test_run_enumeration_skips_nugget_only_combos():
     assert ["NUG01"] not in mix_sku_keys
     assert ["FIL01"] in metric_sku_keys
     assert ["NUG01"] not in metric_sku_keys
+
+
+def test_run_enumeration_does_not_persist_repeated_nugget_mix_above_bucket_target():
+    client = mongomock.MongoClient()
+    db = client["enumeration_db"]
+
+    db["skus"].insert_many([
+        make_sku("45066", ["D"], 16, product_type="NUGGET|STRIP"),
+        make_sku("31035", ["R"], 180, product_type="FILET"),
+        make_sku("38130", ["M"], 166, customer_type="RTL", product_type="FILET"),
+    ])
+    db["cut_strategies"].insert_one(make_cut_strategy("cs-nug-fil", ["D", "R", "M"], has_nugget=True))
+    db["buckets"].insert_one(make_bucket("bucket-8", min_weight=390, target_weight=390, max_weight=440))
+
+    job_repo = MagicMock()
+    job_repo.is_cancelled.return_value = False
+
+    with patch("config.get_settings", return_value=_mock_settings()), \
+         patch("enumeration_engine.requests.get", side_effect=_mock_requests_get):
+        run_enumeration(
+            db=db,
+            job_id="job-7",
+            run_id="run-7",
+            job_repo=job_repo,
+            max_combination_size=4,
+            batch_size=1000,
+        )
+
+    persisted = list(db["mix_metrics"].find({"bucketId": "bucket-8", "skuKeys": ["45066", "31035", "38130"]}))
+    assert all(metric["totalProductProducedGrams"] <= 390 for metric in persisted)
 
 
 def test_run_enumeration_persists_metric_derived_fields():
